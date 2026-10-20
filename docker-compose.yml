@@ -1,0 +1,25 @@
+services:
+  tradingview-alerts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tradingview-price-alerts:latest
+    container_name: tradingview_alerts
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/live')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
