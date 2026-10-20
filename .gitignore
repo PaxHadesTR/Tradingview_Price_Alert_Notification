@@ -13,6 +13,9 @@ ENV/
 .env
 !.env.example
 
+# Internal Protocols & Prompt Specs
+Antigravity_Autonomous_Mesh_Universal.xml
+
 # Testing & Coverage
 .pytest_cache/
 .coverage
