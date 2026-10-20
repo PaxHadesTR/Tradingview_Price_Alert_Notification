@@ -12,6 +12,8 @@ services:
       - ./data:/app/data
     env_file:
       - .env
+    depends_on:
+      - warp
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/live')\""]
       interval: 30s
@@ -23,3 +25,16 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Cloudflare WARP Proxy Sidecar (Essential for regions where Discord is blocked, e.g., Turkey / BTK block)
+  warp:
+    image: caomingjun/warp:latest
+    container_name: warp_proxy
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"

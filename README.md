@@ -6,6 +6,37 @@ Run your own alert service 24/7 on **Coolify** or Docker. Set alerts for **Crypt
 
 ---
 
+## 🇹🇷 Türkiye İçin Kurulum & Discord Erişim Engeli Çözümü (Cloudflare WARP)
+
+Türkiye'de BTK ve mahkeme kararıyla **Discord'a erişim engeli** uygulandığından, Türkiye lokasyonlu sunuculardan (veya yerel WSL/Docker kurulumlarından) `discord.com`'a bağlanmaya çalışıldığında internet servis sağlayıcıların (Superonline, TTNET vb.) DPI engellemesi nedeniyle şu hata alınır:
+```text
+SSLCertVerificationError: certificate verify failed: self-signed certificate
+```
+
+Bu projede Türkiye'deki kullanıcıların ek hiçbir ücret ödemeden ve VPN kurmak zorunda kalmadan Discord botunu çalıştırabilmesi için **Cloudflare WARP Sidecar / Proxy** desteği entegre edilmiştir.
+
+### Nasıl Uygulanır?
+
+#### 1. Coolify ile Kullanıyorsanız (Tek Komut)
+Sunucunuzun terminalinde (veya WSL içinde) tek bir komutla hafif Cloudflare WARP konteynerini `coolify` ağına bağlayın:
+```bash
+docker run -d --name warp --cap-add NET_ADMIN --network coolify --restart always caomingjun/warp
+```
+Ardından Coolify'da **Environment Variables** kısmına şunu ekleyin:
+```env
+DISCORD_PROXY=http://warp:1080
+```
+Konteyneri **Restart** ettiğinizde bot engeli tamamen aşarak Discord'a bağlanacaktır.
+
+#### 2. Standart Docker Compose ile Kullanıyorsanız
+Proje kökündeki `docker-compose.yml` dosyasına `warp` servisi zaten eklenmiştir:
+```bash
+docker compose up -d --build
+```
+Konteynerler ayağa kalktığında bot otomatik olarak `warp` proxy'si üzerinden Discord'a bağlanır.
+
+---
+
 ## Key Features
 
 1. **Independent of TradingView Plan Limits**:
@@ -59,8 +90,8 @@ Run your own alert service 24/7 on **Coolify** or Docker. Set alerts for **Crypt
 ### 1. Discord Bot Token Setup
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create a **New Application** -> **Bot**.
-3. Under **Privileged Gateway Intents**, enable **Message Content Intent** (and Server Members if needed).
-4. Copy the **Token** into `DISCORD_BOT_TOKEN`.
+3. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
+4. Click **Reset Token** and copy your **Bot Token** into `DISCORD_BOT_TOKEN`.
 5. Under **OAuth2 -> URL Generator**, check `bot` and `applications.commands`.
    Permissions: `Send Messages`, `Embed Links`, `Attach Files`, `Read Message History`.
 6. Invite the bot to your Discord server using the generated URL.
@@ -72,6 +103,7 @@ In your Coolify service, configure Environment Variables:
 # Bot & Channel Configuration
 DISCORD_BOT_TOKEN=your_bot_token_from_developer_portal
 DISCORD_ALERT_CHANNEL_ID=your_discord_channel_id_here
+DISCORD_PROXY=http://warp:1080
 
 # Engine Quotas
 MAX_ACTIVE_ALERTS=100
