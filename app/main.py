@@ -65,13 +65,25 @@ async def lifespan(app: FastAPI):
     bot: Optional[DiscordAlertBot] = None
     bot_task: Optional[asyncio.Task] = None
 
-    if settings.DISCORD_BOT_TOKEN and settings.DISCORD_BOT_TOKEN != "your_discord_bot_token_here":
+    token = (settings.DISCORD_BOT_TOKEN or "").strip().strip('"').strip("'")
+    if token and token != "your_discord_bot_token_here" and token != "buraya_bot_tokeniniz":
         bot = DiscordAlertBot(engine=alert_engine, settings=settings)
-        bot_task = asyncio.create_task(bot.start(settings.DISCORD_BOT_TOKEN), name="discord_bot_gateway")
+
+        async def _run_bot():
+            try:
+                logger.info("Attempting to connect Discord Bot to Discord Gateway...")
+                await bot.start(token)
+            except Exception as bot_err:
+                logger.error("FATAL: Discord Bot failed to start: %s", bot_err, exc_info=True)
+
+        bot_task = asyncio.create_task(_run_bot(), name="discord_bot_gateway")
         app.state.discord_bot = bot
-        logger.info("Discord Bot client scheduled for connection to Discord Gateway.")
     else:
-        logger.info("No DISCORD_BOT_TOKEN configured. Discord Slash Commands Bot is idle. Webhook & Market APIs active.")
+        logger.warning(
+            "DISCORD_BOT_TOKEN is empty or placeholder ('%s'). Bot cannot connect to Discord! "
+            "Please configure DISCORD_BOT_TOKEN in Coolify Environment Variables and Restart.",
+            token[:10] if token else "EMPTY"
+        )
 
     yield
 

@@ -67,6 +67,20 @@ class DiscordAlertBot(commands.Bot):
         except Exception as e:
             logger.warning("Failed syncing slash command tree (bot might lack permissions or offline): %s", e)
 
+    async def on_ready(self) -> None:
+        """Invoked when bot successfully logs into Discord Gateway and goes Online."""
+        logger.info("🚀 Discord Bot is ONLINE! Logged in as: %s (ID: %s)", self.user, self.user.id if self.user else "N/A")
+        try:
+            await self.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name="Piyasalar | /alert",
+                ),
+                status=discord.Status.online,
+            )
+        except Exception as e:
+            logger.debug("Failed updating presence activity: %s", e)
+
     def _register_commands(self) -> None:
         """Define slash commands using discord.app_commands."""
         alert_group = app_commands.Group(name="alert", description="Fiyat alarmı komutları")
