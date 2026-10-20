@@ -11,6 +11,42 @@ def test_classify_crypto():
     assert asset_type2 == "CRYPTO"
 
 
+def test_classify_crypto_shorthand():
+    sym, asset_type = classify_and_normalize("btc")
+    assert sym == "BTCUSDT"
+    assert asset_type == "CRYPTO"
+
+    sym2, asset_type2 = classify_and_normalize("eth")
+    assert sym2 == "ETHUSDT"
+    assert asset_type2 == "CRYPTO"
+
+    sym3, asset_type3 = classify_and_normalize("sol")
+    assert sym3 == "SOLUSDT"
+    assert asset_type3 == "CRYPTO"
+
+
+def test_classify_indices():
+    sym, asset_type = classify_and_normalize("nasdaq")
+    assert sym == "^IXIC"
+    assert asset_type == "EQUITY_FOREX"
+
+    sym2, asset_type2 = classify_and_normalize("xu100")
+    assert sym2 == "XU100.IS"
+    assert asset_type2 == "EQUITY_FOREX"
+
+    sym3, asset_type3 = classify_and_normalize("bist100")
+    assert sym3 == "XU100.IS"
+    assert asset_type3 == "EQUITY_FOREX"
+
+    sym4, asset_type4 = classify_and_normalize("dxy")
+    assert sym4 == "DX-Y.NYB"
+    assert asset_type4 == "EQUITY_FOREX"
+
+    sym5, asset_type5 = classify_and_normalize("sp500")
+    assert sym5 == "^GSPC"
+    assert asset_type5 == "EQUITY_FOREX"
+
+
 def test_classify_bist():
     sym, asset_type = classify_and_normalize("THYAO")
     assert sym == "THYAO.IS"
@@ -36,13 +72,17 @@ def test_classify_commodities():
     assert sym == "GC=F"
     assert asset_type == "EQUITY_FOREX"
 
-    sym2, asset_type2 = classify_and_normalize("altin")
+    sym2, asset_type2 = classify_and_normalize("xau")
     assert sym2 == "GC=F"
     assert asset_type2 == "EQUITY_FOREX"
 
-    sym3, asset_type3 = classify_and_normalize("brent")
-    assert sym3 == "BZ=F"
+    sym3, asset_type3 = classify_and_normalize("xauusd")
+    assert sym3 == "GC=F"
     assert asset_type3 == "EQUITY_FOREX"
+
+    sym4, asset_type4 = classify_and_normalize("brent")
+    assert sym4 == "BZ=F"
+    assert asset_type4 == "EQUITY_FOREX"
 
 
 def test_classify_us_equities():

@@ -28,6 +28,21 @@ class YahooFinanceFeed:
     async def fetch_price(self, symbol: str) -> Optional[float]:
         """Fetch latest price snapshot for non-crypto symbols (BIST, US Equities, Forex, Gold)."""
         symbol_clean = symbol.upper().strip()
+        price = await self._fetch_direct_price(symbol_clean)
+        if price is not None:
+            return price
+
+        # If not found and symbol has no extension, attempt BIST fallback (.IS)
+        if "." not in symbol_clean and "=" not in symbol_clean and "^" not in symbol_clean:
+            bist_symbol = f"{symbol_clean}.IS"
+            logger.debug("Attempting BIST fallback lookup for %s -> %s", symbol_clean, bist_symbol)
+            bist_price = await self._fetch_direct_price(bist_symbol)
+            if bist_price is not None:
+                return bist_price
+
+        return None
+
+    async def _fetch_direct_price(self, symbol_clean: str) -> Optional[float]:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol_clean}"
         params = {"interval": "1m", "range": "1d"}
 
@@ -50,10 +65,10 @@ class YahooFinanceFeed:
                     if valid_closes:
                         return float(valid_closes[-1])
 
-            logger.warning("Yahoo Finance returned status %d for symbol %s", response.status_code, symbol_clean)
+            logger.debug("Yahoo Finance returned status %d for symbol %s", response.status_code, symbol_clean)
             return None
         except Exception as e:
-            logger.error("Failed fetching Yahoo price for %s: %s", symbol_clean, e)
+            logger.debug("Failed fetching Yahoo price for %s: %s", symbol_clean, e)
             return None
         finally:
             if not self._client:

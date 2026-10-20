@@ -74,6 +74,7 @@ class AutonomousAlertEngine:
         raw_symbol: str,
         target_price: float,
         note: Optional[str] = None,
+        notify_dm: bool = False,
     ) -> Tuple[bool, str, Optional[AlertRecord]]:
         """Validate quotas, fetch current price, detect direction, and register alert."""
         # 1. Enforce max active alerts quota
@@ -121,6 +122,7 @@ class AutonomousAlertEngine:
             initial_price=current_price,
             direction=direction,
             note=note,
+            notify_dm=notify_dm,
         )
 
         record = await self.db.get_alert_by_id(alert_id)

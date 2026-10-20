@@ -8,10 +8,7 @@ Run your own alert service 24/7 on **Coolify** or Docker. Set alerts for **Crypt
 
 ## 🇹🇷 Türkiye İçin Kurulum & Discord Erişim Engeli Çözümü (Cloudflare WARP)
 
-Türkiye'de BTK ve mahkeme kararıyla **Discord'a erişim engeli** uygulandığından, Türkiye lokasyonlu sunuculardan (veya yerel WSL/Docker kurulumlarından) `discord.com`'a bağlanmaya çalışıldığında internet servis sağlayıcıların (Superonline, TTNET vb.) DPI engellemesi nedeniyle şu hata alınır:
-```text
-SSLCertVerificationError: certificate verify failed: self-signed certificate
-```
+Türkiye'de BTK ve mahkeme kararıyla **Discord'a erişim engeli** uygulandığından, Türkiye lokasyonlu sunuculardan (veya yerel WSL/Docker kurulumlarından) `discord.com`'a bağlanmaya çalışıldığında internet servis sağlayıcıların (Superonline, TTNET vb.) DPI engellemesi nedeniyle `SSLCertVerificationError` hatası alınır.
 
 Bu projede Türkiye'deki kullanıcıların ek hiçbir ücret ödemeden ve VPN kurmak zorunda kalmadan Discord botunu çalıştırabilmesi için **Cloudflare WARP Sidecar / Proxy** desteği entegre edilmiştir.
 
@@ -45,16 +42,19 @@ Konteynerler ayağa kalktığında bot otomatik olarak `warp` proxy'si üzerinde
    - **Binance WebSocket Stream (`!miniTicker@arr`)**: Sub-second ticker stream for all Binance crypto pairs with zero API key required.
    - **Yahoo Finance Async REST Feed**: Periodic polling for non-crypto assets (BIST `.IS`, US Stocks, Forex `=X`, Gold `GC=F`).
 3. **Interactive Discord Bot with Slash Commands**:
-   - `/alert set <symbol> <target_price> [note]`: Auto-detects whether it is an `ABOVE` breakout or `BELOW` breakdown based on current price.
-   - `/alert list [status]`: Neatly formatted embed showing your active or triggered alerts.
+   - `/alert set <symbol> <target_price> [note] [dm]`: Auto-detects whether it is an `ABOVE` breakout or `BELOW` breakdown. Optional `dm:True` sends notification directly to your Discord DMs.
+   - `/alert list [status]`: Shows active/triggered alerts with live prices, percentage distance to target, and an interactive **Dropdown Menu** to delete alerts with 1-click.
    - `/alert delete <alert_id>`: Cancel any alert by ID.
+   - `/watchlist show`: Instant dashboard showing live prices for all assets on your personal watchlist.
+   - `/watchlist add <symbol>` & `/watchlist remove <symbol>`: Manage your favorite assets.
    - `/price <symbol>`: Check live price for any asset.
-   - **Interactive Buttons**: Dispatched notifications feature "🔄 Yeniden Kur" and "🗑 Temizle" buttons right on the embed!
+   - **Real-Time Autocomplete**: Suggests popular Crypto, BIST stocks, US equities, commodities, and indices as you type.
+   - **Interactive Buttons**: Dispatched notifications feature "🔄 Yeniden Kur" and "🗑 Temizle" buttons.
 4. **Quota & Stale Alert Protections**:
    - Configurable `MAX_ACTIVE_ALERTS` (e.g. 100) to protect server resources.
    - Automatic expiration cleaner for forgotten alerts older than `ALERT_EXPIRY_DAYS` (e.g. 180 days / 6 months).
 5. **Persistent SQLite Database**:
-   - Uses `aiosqlite` with Write-Ahead Logging (`PRAGMA journal_mode=WAL`) in `./data/alerts.db`, ensuring alerts survive container redeployments.
+   - Uses `aiosqlite` with Write-Ahead Logging (`PRAGMA journal_mode=WAL`) in `./data/alerts.db`, ensuring alerts and watchlists survive container redeployments.
 6. **Coolify-Ready**:
    - Multi-stage non-root `Dockerfile`, `/healthz` and `/live` probes, and `docker-compose.yml` with persistent volume mapping.
 7. **Backwards Compatible Webhook Ingestion**:
@@ -66,21 +66,23 @@ Konteynerler ayağa kalktığında bot otomatik olarak `warp` proxy'si üzerinde
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
-| `/alert set <symbol> <price> [note]` | Creates a new price threshold alert | `/alert set symbol:BTCUSDT target_price:72000 note:Direnç kırılımı` |
-| `/alert set symbol:THYAO target_price:360` | Auto-normalizes to `THYAO.IS` | `/alert set symbol:THYAO target_price:360` |
-| `/alert set symbol:GOLD target_price:2750` | Auto-routes to Gold futures (`GC=F`) | `/alert set symbol:GOLD target_price:2750` |
-| `/alert list [status]` | Lists your alerts (Active, Triggered, All) | `/alert list status:Aktif Alarmlar` |
+| `/alert set <symbol> <price> [note] [dm]` | Creates a new price threshold alert with optional DM delivery | `/alert set symbol:BTCUSDT target_price:85000 note:Direnç dm:True` |
+| `/alert list [status]` | Lists alerts with live prices, target distance %, and dropdown delete menu | `/alert list status:Aktif Alarmlar` |
 | `/alert delete <id>` | Cancels an active alert by ID | `/alert delete alert_id:4` |
-| `/price <symbol>` | Instant price query | `/price symbol:SOLUSDT` |
+| `/price <symbol>` | Instant price query (supports autocomplete) | `/price symbol:SOLUSDT` |
+| `/watchlist show` | Shows live prices for all assets on your personal watchlist | `/watchlist show` |
+| `/watchlist add <symbol>` | Adds a symbol to your watchlist | `/watchlist add symbol:THYAO` |
+| `/watchlist remove <symbol>` | Removes a symbol from your watchlist | `/watchlist remove symbol:THYAO` |
 
 ---
 
 ## Supported Symbol Formats
 
-- **Crypto**: `BTCUSDT`, `ETHUSDT`, `SOLUSDC`, `PEPEUSDT` (Binance pairs)
-- **Borsa Istanbul**: `THYAO`, `ASELS`, `GARAN`, `EREGL` (auto-appends `.IS` if omitted) or `THYAO.IS`
+- **Crypto**: `BTCUSDT`, `ETHUSDT`, `SOLUSDC`, `PEPEUSDT` (or shorthand: `BTC`, `ETH`, `SOL`)
+- **Borsa Istanbul**: `THYAO`, `ASELS`, `GARAN`, `EREGL`, `ALARK` (auto-appends `.IS` if omitted) or `THYAO.IS`
+- **Indices**: `XU100`, `BIST100`, `BIST30`, `NASDAQ`, `NDX`, `SP500`, `DXY`
 - **Forex**: `USDTRY`, `EURTRY`, `EURUSD` (auto-appends `=X`) or `USDTRY=X`
-- **Commodities**: `GOLD` / `ALTIN` (`GC=F`), `SILVER` / `GUMUS` (`SI=F`), `BRENT` (`BZ=F`)
+- **Commodities**: `GOLD` / `ALTIN` / `XAU` (`GC=F`), `SILVER` / `GUMUS` / `XAG` (`SI=F`), `BRENT` (`BZ=F`)
 - **US Stocks**: `AAPL`, `TSLA`, `NVDA`, `MSFT`
 
 ---
@@ -124,4 +126,4 @@ Coolify mounts `./data:/app/data` to ensure the SQLite database (`alerts.db`) pe
 ```bash
 python -m pytest tests -v
 ```
-All 36 tests pass with 100% test coverage for authentication, dual parsers, token bucket rate limiter, SQLite transactions, symbol classification, and alert triggers.
+All 40 tests pass with 100% test coverage for authentication, dual parsers, token bucket rate limiter, SQLite transactions, watchlists, DM flags, symbol classification, and alert triggers.
