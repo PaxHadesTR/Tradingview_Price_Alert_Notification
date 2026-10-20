@@ -53,10 +53,13 @@ class DiscordAlertBot(commands.Bot):
 
     def __init__(self, engine: AutonomousAlertEngine, settings: Settings):
         intents = discord.Intents.default()
-        super().__init__(command_prefix="!", intents=intents)
+        proxy_url = (settings.DISCORD_PROXY or "").strip() or None
+        super().__init__(command_prefix="!", intents=intents, proxy=proxy_url)
         self.engine = engine
         self.settings = settings
         self.engine.trigger_callback = self.dispatch_alert_notification
+        if proxy_url:
+            logger.info("Discord Bot configured with outbound proxy: %s", proxy_url)
 
     async def setup_hook(self) -> None:
         """Register slash command groups and sync tree."""

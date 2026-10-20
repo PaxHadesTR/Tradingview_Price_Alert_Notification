@@ -23,10 +23,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/home/appuser/.local/bin:$PATH"
 
-# Create non-root system user and persistent data storage
-RUN groupadd -g 10001 appgroup && \
-    useradd -u 10001 -g appgroup -m -s /bin/bash appuser && \
-    mkdir -p /app/data && chown -R appuser:appgroup /app
+# Install CA certificates and create non-root system user
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 10001 appgroup \
+    && useradd -u 10001 -g appgroup -m -s /bin/bash appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appgroup /app
 
 # Copy installed dependencies from builder
 COPY --from=builder --chown=appuser:appgroup /root/.local /home/appuser/.local

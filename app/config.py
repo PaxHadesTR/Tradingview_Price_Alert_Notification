@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Discord Bot Configuration (for interactive Slash Commands and autonomous alerts)
     DISCORD_BOT_TOKEN: Optional[str] = None
     DISCORD_ALERT_CHANNEL_ID: Optional[int] = None
+    # Optional HTTP/SOCKS5 proxy for connecting to Discord from blocked regions (e.g. Turkey)
+    DISCORD_PROXY: Optional[str] = None
 
     # Autonomous Alert Engine & Limits
     SQLITE_DB_PATH: str = "./data/alerts.db"
