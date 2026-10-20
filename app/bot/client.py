@@ -257,7 +257,7 @@ class DiscordAlertBot(commands.Bot):
 
         # --- /price ---
         @self.tree.command(name="price", description="Herhangi bir sembolün güncel fiyatını sorgular")
-        @app_commands.describe(symbol="Sorgulanacak sembol (Örn: BTC, ETH, THYAO, GOLD, NASDAQ, USDTRY)")
+        @app_commands.describe(symbol="Sorgulanacak sembol (Örn: BTC, ETH, THYAO, GOLD, NASDAQ, DJI, USDTRY)")
         @app_commands.autocomplete(symbol=symbol_autocomplete_handler)
         async def price_query(interaction: discord.Interaction, symbol: str):
             await interaction.response.defer(ephemeral=False)
@@ -267,8 +267,12 @@ class DiscordAlertBot(commands.Bot):
                 await interaction.followup.send(f"❌ **{symbol}** için anlık fiyat alınamadı.")
                 return
 
+            display_title = symbol.upper().strip()
+            if display_title != norm_symbol:
+                display_title = f"{display_title} ({norm_symbol})"
+
             embed = discord.Embed(
-                title=f"💰 Fiyat Bilgisi: {norm_symbol}",
+                title=f"💰 Fiyat Bilgisi: {display_title}",
                 color=0x3399FF,
                 timestamp=datetime.now(),
             )
