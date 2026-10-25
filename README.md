@@ -1,5 +1,10 @@
 # Autonomous Market Price Alert & Discord Bot Engine
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+[![Tests](https://img.shields.io/badge/tests-50%20passed-brightgreen.svg)](tests/)
+
 A high-performance, self-hosted, autonomous price monitoring and notification service designed to bypass TradingView free-tier alert limits and provide institutional-grade alerts on your own infrastructure.
 
 Run your own alert service 24/7 on **Coolify** or Docker. Set alerts for **Crypto (Binance)**, **Borsa Istanbul (BIST)**, **US Equities**, **Forex**, and **Commodities (Gold/Silver/Oil)** directly from **Discord** via modern Slash Commands, or route your **TradingView Webhooks** directly into Discord.
@@ -176,3 +181,9 @@ python -m pytest tests -v
 ======================== 50 passed, 1 warning in 1.43s ========================
 ```
 Authentication, dual parser, token bucket rate limiter, SQLite işlemleri, watchlist, DM bildirimleri, yüzdesel alarmlar, cache tazeliği, sembol sınıflandırması ve tetikleyici motoru dahil **50 testin tamamı %100 yeşildir**.
+
+---
+
+## 📄 Lisans (License)
+
+Bu proje [MIT Lisansı](LICENSE) altında açık kaynak olarak lisanslanmıştır. Detaylar için [`LICENSE`](LICENSE) dosyasına göz atabilirsiniz.
