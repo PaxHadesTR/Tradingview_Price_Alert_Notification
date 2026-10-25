@@ -140,3 +140,63 @@ class DiscordWebhookProvider(BaseNotificationProvider):
         """Close the underlying HTTP client session if owned."""
         if not self._external_client and not self._client.is_closed:
             await self._client.aclose()
+
+
+class DiscordBotNotificationProvider(BaseNotificationProvider):
+    """Dispatches TradingView alerts directly to a Discord channel using the active Discord Bot client."""
+
+    def __init__(self, bot: Any, channel_id: int):
+        self.bot = bot
+        self.channel_id = channel_id
+
+    async def send(self, alert: AlertPayload) -> bool:
+        if not self.bot or not self.channel_id:
+            return False
+
+        try:
+            channel = self.bot.get_channel(self.channel_id)
+            if not channel:
+                channel = await self.bot.fetch_channel(self.channel_id)
+            if not channel:
+                logger.error("DiscordBotNotificationProvider: Channel %s not found.", self.channel_id)
+                return False
+
+            import discord
+            is_bullish = alert.is_bullish
+            is_bearish = alert.is_bearish
+            icon = "🟢" if is_bullish else ("🔴" if is_bearish else "🔔")
+            direction = f"BUY / {alert.normalized_action}" if is_bullish else (
+                f"SELL / {alert.normalized_action}" if is_bearish else alert.normalized_action
+            )
+
+            embed = discord.Embed(
+                title=f"{icon} {alert.ticker} - {direction}",
+                description=f"> {alert.message}" if alert.message else None,
+                color=alert.embed_color,
+            )
+
+            if alert.price is not None:
+                if alert.price >= 1.0:
+                    price_str = f"${alert.price:,.2f}" if alert.price > 10 else f"${alert.price:.4f}"
+                else:
+                    price_str = f"${alert.price:.8f}".rstrip("0")
+                embed.add_field(name="💵 Fiyat", value=f"`{price_str}`", inline=True)
+            if alert.strategy:
+                embed.add_field(name="🎯 Strateji", value=f"`{alert.strategy}`", inline=True)
+            if alert.timeframe:
+                embed.add_field(name="⏱ Zaman Dilimi", value=f"`{alert.timeframe}`", inline=True)
+
+            if alert.extra_data:
+                for k, v in list(alert.extra_data.items())[:5]:
+                    embed.add_field(name=f"🔹 {k.capitalize()}", value=f"`{v}`", inline=True)
+
+            embed.set_footer(text="TradingView Alert Dispatcher • Discord Bot")
+            await channel.send(embed=embed)
+            logger.info("Successfully dispatched TradingView alert via Bot to channel %s", self.channel_id)
+            return True
+        except Exception as e:
+            logger.error("Failed dispatching alert via Discord Bot: %s", e)
+            return False
+
+    async def close(self) -> None:
+        pass

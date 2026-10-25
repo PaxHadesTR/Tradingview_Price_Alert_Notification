@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Callable, Coroutine, List, Optional, Tuple
+from typing import Callable, Coroutine, List, Optional, Tuple, Union
 from app.config import Settings
 from app.database.db import AlertDatabase, AlertRecord
 from app.market_data.feed import UnifiedPriceFeed
@@ -9,6 +9,63 @@ from app.market_data.symbols import classify_and_normalize
 logger = logging.getLogger(__name__)
 
 AlertTriggerCallback = Callable[[AlertRecord, float], Coroutine[None, None, None]]
+
+
+def parse_target_price_input(
+    target_input: Union[float, str],
+    current_price: float,
+) -> Tuple[Optional[float], Optional[str]]:
+    """Parse numeric price or percentage offset (e.g., '+5%', '-3%', '150,5', '70k', '$65,000').
+
+    Returns (calculated_target_price, auto_note_suffix) or (None, error_message).
+    """
+    if isinstance(target_input, (int, float)):
+        val = float(target_input)
+        if val <= 0:
+            return None, "Hedef fiyat 0'dan büyük pozitif bir sayı olmalıdır."
+        return val, None
+
+    clean = str(target_input).strip()
+    if not clean:
+        return None, "Hedef fiyat boş bırakılamaz."
+
+    # Strip currency symbols
+    for prefix in ("$", "€", "₺", "TL", "USD"):
+        if clean.upper().startswith(prefix):
+            clean = clean[len(prefix):].strip()
+        if clean.upper().endswith(prefix):
+            clean = clean[:-len(prefix)].strip()
+
+    # Check for percentage notation: e.g. "+5%", "-3%", "5%"
+    if clean.endswith("%"):
+        try:
+            pct = float(clean[:-1].strip().replace(",", "."))
+            if pct == 0:
+                return None, "Yüzdesel hedef değişim %0 olamaz."
+            calc = current_price * (1.0 + (pct / 100.0))
+            if calc <= 0:
+                return None, "Hesaplanan hedef fiyat 0 veya altına düştü."
+            return calc, f"({pct:+g}% hedefi)"
+        except ValueError:
+            return None, f"Geçersiz yüzde formatı: '{target_input}'. Örnek: +5% veya -3%"
+
+    # Check for 'k' / 'm' suffixes: e.g. 70k -> 70000, 1.5m -> 1500000
+    multiplier = 1.0
+    if clean.lower().endswith("k"):
+        multiplier = 1000.0
+        clean = clean[:-1].strip()
+    elif clean.lower().endswith("m"):
+        multiplier = 1000000.0
+        clean = clean[:-1].strip()
+
+    clean = clean.replace(" ", "").replace(",", ".")
+    try:
+        val = float(clean) * multiplier
+        if val <= 0:
+            return None, "Hedef fiyat 0'dan büyük pozitif bir sayı olmalıdır."
+        return val, None
+    except ValueError:
+        return None, f"Geçersiz fiyat formatı: '{target_input}'. Örnekler: 70000, 150.5, +5%, -3%, 70k"
 
 
 class AutonomousAlertEngine:
@@ -33,9 +90,11 @@ class AutonomousAlertEngine:
         self.feed.set_active_equity_supplier(self._get_active_non_crypto_symbols)
 
     async def _get_active_non_crypto_symbols(self) -> List[str]:
-        """Fetch all active non-crypto symbols currently registered in database for Yahoo polling."""
+        """Fetch all active non-crypto symbols currently registered in database alerts and watchlists."""
         active = await self.db.get_active_alerts()
-        return [a.symbol for a in active if a.asset_type == "EQUITY_FOREX"]
+        alert_symbols = [a.symbol for a in active if a.asset_type == "EQUITY_FOREX"]
+        watchlist_symbols = await self.db.get_all_watchlist_symbols(asset_type="EQUITY_FOREX")
+        return list(set(alert_symbols + watchlist_symbols))
 
     async def _on_price_tick(self, symbol: str, current_price: float) -> None:
         """Evaluate active alerts when a price tick arrives."""
@@ -72,45 +131,64 @@ class AutonomousAlertEngine:
         channel_id: str,
         guild_id: Optional[str],
         raw_symbol: str,
-        target_price: float,
+        target_price: Union[float, str],
         note: Optional[str] = None,
         notify_dm: bool = False,
     ) -> Tuple[bool, str, Optional[AlertRecord]]:
         """Validate quotas, fetch current price, detect direction, and register alert."""
-        # 1. Enforce max active alerts quota
+        # 1. Enforce global quota
         total_active = await self.db.count_active_alerts()
         if total_active >= self.settings.MAX_ACTIVE_ALERTS:
             return (
                 False,
-                f"Sistem alarm kotası dolu! (Aktif: {total_active}/{self.settings.MAX_ACTIVE_ALERTS}). Lütfen eski alarmları temizleyin.",
+                f"Sistem genel alarm kotası dolu! (Aktif: {total_active}/{self.settings.MAX_ACTIVE_ALERTS}). Lütfen eski alarmları temizleyin.",
                 None,
             )
 
-        # 2. Normalize symbol and classify asset type
+        # 2. Enforce per-user quota
+        user_active = await self.db.count_active_alerts(user_id=user_id)
+        if user_active >= self.settings.MAX_USER_ACTIVE_ALERTS:
+            return (
+                False,
+                f"Kişisel aktif alarm limitinize ({user_active}/{self.settings.MAX_USER_ACTIVE_ALERTS}) ulaştınız! Lütfen `/alert list` veya `/alert clear` ile eski alarmları temizleyin.",
+                None,
+            )
+
+        # 3. Normalize symbol and classify asset type
         symbol, asset_type = classify_and_normalize(raw_symbol)
 
-        # 3. Retrieve current market price
+        # 4. Retrieve current market price
         current_price = await self.feed.get_current_price(symbol)
         if current_price is None:
             return (
                 False,
-                f"**{symbol}** sembolü için anlık fiyat alınamadı. Lütfen sembol adını kontrol edin (örn: BTCUSDT, THYAO, USDTRY, AAPL).",
+                f"**{symbol}** sembolü için anlık fiyat alınamadı. Lütfen sembol adını kontrol edin (örn: BTCUSDT, THYAO, USDTRY, GOLD, NASDAQ).",
                 None,
             )
 
-        # 4. Auto-detect direction
-        if target_price > current_price:
+        # 5. Parse target price (number or percentage distance)
+        calc_target, note_suffix = parse_target_price_input(target_price, current_price)
+        if calc_target is None:
+            return False, f"❌ {note_suffix}", None
+
+        # Append percentage label to note if provided
+        final_note = note
+        if note_suffix:
+            final_note = f"{note} {note_suffix}".strip() if note else note_suffix
+
+        # 6. Auto-detect direction
+        if calc_target > current_price:
             direction = "ABOVE"
-        elif target_price < current_price:
+        elif calc_target < current_price:
             direction = "BELOW"
         else:
             return (
                 False,
-                f"Hedef fiyat (${target_price:,.4f}) şu anki piyasa fiyatına (${current_price:,.4f}) zaten eşit!",
+                f"Hedef fiyat (${calc_target:,.4f}) şu anki piyasa fiyatına (${current_price:,.4f}) zaten eşit!",
                 None,
             )
 
-        # 5. Insert alert into database
+        # 7. Insert alert into database
         alert_id = await self.db.add_alert(
             user_id=user_id,
             user_name=user_name,
@@ -118,10 +196,10 @@ class AutonomousAlertEngine:
             guild_id=guild_id,
             symbol=symbol,
             asset_type=asset_type,
-            target_price=target_price,
+            target_price=calc_target,
             initial_price=current_price,
             direction=direction,
-            note=note,
+            note=final_note,
             notify_dm=notify_dm,
         )
 

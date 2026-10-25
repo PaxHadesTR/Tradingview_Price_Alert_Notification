@@ -42,12 +42,18 @@ class YahooFinanceFeed:
 
         return None
 
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Return cached AsyncClient with browser headers, recreating if closed."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(headers=HEADERS, timeout=self.timeout)
+        return self._client
+
     async def _fetch_direct_price(self, symbol_clean: str) -> Optional[float]:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol_clean}"
         params = {"interval": "1m", "range": "1d"}
 
-        client = self._client or httpx.AsyncClient(headers=HEADERS, timeout=self.timeout)
         try:
+            client = await self._get_client()
             response = await client.get(url, params=params)
             if response.status_code == 200:
                 data = response.json()
@@ -70,9 +76,6 @@ class YahooFinanceFeed:
         except Exception as e:
             logger.debug("Failed fetching Yahoo price for %s: %s", symbol_clean, e)
             return None
-        finally:
-            if not self._client:
-                await client.aclose()
 
     def start_polling(
         self,

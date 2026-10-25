@@ -1,6 +1,7 @@
 import asyncio
 import logging
-from typing import Callable, Coroutine, Dict, List, Optional
+import time
+from typing import Callable, Coroutine, Dict, List, Optional, Tuple
 from app.market_data.binance import BinanceMarketFeed
 from app.market_data.symbols import classify_and_normalize
 from app.market_data.yahoo import YahooFinanceFeed
@@ -17,10 +18,13 @@ class UnifiedPriceFeed:
         self,
         binance_feed: Optional[BinanceMarketFeed] = None,
         yahoo_feed: Optional[YahooFinanceFeed] = None,
+        cache_ttl_seconds: float = 20.0,
     ) -> None:
         self.binance = binance_feed or BinanceMarketFeed()
         self.yahoo = yahoo_feed or YahooFinanceFeed()
-        self.price_cache: Dict[str, float] = {}
+        self.cache_ttl = cache_ttl_seconds
+        # Maps symbol -> (price: float, timestamp: float)
+        self.price_cache: Dict[str, Tuple[float, float]] = {}
         self._listeners: List[PriceListener] = []
         self._active_non_crypto_supplier: Optional[Callable[[], Coroutine[None, None, List[str]]]] = None
 
@@ -33,11 +37,17 @@ class UnifiedPriceFeed:
         self._listeners.append(listener)
 
     async def get_current_price(self, raw_symbol: str) -> Optional[float]:
-        """Fetch current price for any symbol, consulting cache first, then live snapshot."""
+        """Fetch current price for any symbol, consulting cache first, then live snapshot.
+
+        Enforces freshness via cache_ttl to ensure stale quotes are never served.
+        """
         normalized, asset_type = classify_and_normalize(raw_symbol)
+        now = time.time()
 
         if normalized in self.price_cache:
-            return self.price_cache[normalized]
+            cached_price, cached_at = self.price_cache[normalized]
+            if (now - cached_at) <= self.cache_ttl:
+                return cached_price
 
         if asset_type == "CRYPTO":
             price = await self.binance.fetch_price(normalized)
@@ -45,13 +55,13 @@ class UnifiedPriceFeed:
             price = await self.yahoo.fetch_price(normalized)
 
         if price is not None:
-            self.price_cache[normalized] = price
+            self.price_cache[normalized] = (price, now)
         return price
 
     async def _handle_price_tick(self, symbol: str, price: float) -> None:
         """Internal dispatch called whenever Binance or Yahoo reports a price."""
         symbol_upper = symbol.upper()
-        self.price_cache[symbol_upper] = price
+        self.price_cache[symbol_upper] = (price, time.time())
 
         # Notify listeners concurrently
         if self._listeners:

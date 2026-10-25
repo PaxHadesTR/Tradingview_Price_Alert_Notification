@@ -55,3 +55,30 @@
 * **Context**: Users must be able to add, inspect, and delete price alerts directly from Discord without writing code. Alerts must survive container restarts.
 * **Decision**: Integrate `discord.py` running on the same asyncio event loop. Use `aiosqlite` with Write-Ahead Logging (`PRAGMA journal_mode=WAL`) storing alerts in `./data/alerts.db`. Implement Slash Commands (`/alert set`, `/alert list`, `/alert delete`, `/price`) and interactive button views.
 * **Outcome**: Rich native Discord interface, persistent alert state, atomic transactions, zero external database setup required.
+
+---
+
+## ADR-007: Outbound Proxy via Cloudflare WARP Sidecar for Turkey ISP DPI Bypass
+* **Date**: 2026-10-21
+* **Status**: ACCEPTED
+* **Context**: In Turkey, ISP-level DPI blocks on `discord.com` cause `SSLCertVerificationError` when connecting to Discord gateways.
+* **Decision**: Add `caomingjun/warp` sidecar container in `docker-compose.yml` and provide standard `DISCORD_PROXY=http://warp:1080` parameter for Discord bot connection.
+* **Outcome**: Seamless Discord connectivity from Turkey servers without paying for external VPN services.
+
+---
+
+## ADR-008: Percentage-Based Alert Parsing and Human Input Normalization
+* **Date**: 2026-10-26
+* **Status**: ACCEPTED
+* **Context**: Real traders often want to set alerts based on percentage moves (e.g. `+5%`, `-3%`) from current prices, or input prices with localized decimal conventions (e.g. `150,50` or `70k`).
+* **Decision**: Implement `parse_target_price_input` supporting percentage offsets, localized comma decimals, human multipliers (`k`/`m`), and stripping currency symbols.
+* **Outcome**: Human-centric user experience that prevents input errors and eliminates manual calculations for traders.
+
+---
+
+## ADR-009: In-Memory Freshness TTL Cache and Watchlist Polling Aggregation
+* **Date**: 2026-10-26
+* **Status**: ACCEPTED
+* **Context**: Cached market quotes must not serve stale prices across hours, and assets monitored in user watchlists should be pre-warmed.
+* **Decision**: Implement timestamped price cache tuples with a 20-second TTL in `UnifiedPriceFeed`, and aggregate both active alerts and user watchlists into the Yahoo Finance background polling supplier.
+* **Outcome**: Instant sub-second quote lookups in `/watchlist show` and `/price` while guaranteeing quotes never become stale.

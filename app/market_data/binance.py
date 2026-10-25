@@ -24,11 +24,17 @@ class BinanceMarketFeed:
         self._task: Optional[asyncio.Task] = None
         self._client: Optional[httpx.AsyncClient] = None
 
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Return cached AsyncClient or recreate if closed."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
     async def fetch_price(self, symbol: str) -> Optional[float]:
         """Fetch immediate spot price snapshot from Binance REST API."""
         symbol_clean = symbol.upper().strip()
-        client = self._client or httpx.AsyncClient(timeout=self.timeout)
         try:
+            client = await self._get_client()
             response = await client.get(self.rest_api_url, params={"symbol": symbol_clean})
             if response.status_code == 200:
                 data = response.json()
@@ -38,9 +44,6 @@ class BinanceMarketFeed:
         except Exception as e:
             logger.error("Failed fetching Binance price for %s: %s", symbol_clean, e)
             return None
-        finally:
-            if not self._client:
-                await client.aclose()
 
     def start_stream(self, on_price_update: Callable[[str, float], Coroutine[None, None, None]]) -> None:
         """Start background WebSocket consumer to stream real-time price updates for all crypto symbols."""

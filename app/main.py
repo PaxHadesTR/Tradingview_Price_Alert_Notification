@@ -69,6 +69,14 @@ async def lifespan(app: FastAPI):
     if token and token != "your_discord_bot_token_here" and token != "buraya_bot_tokeniniz":
         bot = DiscordAlertBot(engine=alert_engine, settings=settings)
 
+        # If no separate DISCORD_WEBHOOK_URL was configured, use the active Discord Bot to dispatch TradingView alerts!
+        if not settings.DISCORD_WEBHOOK_URL and settings.DISCORD_ALERT_CHANNEL_ID:
+            from app.providers.discord import DiscordBotNotificationProvider
+            queue_service.providers.append(
+                DiscordBotNotificationProvider(bot=bot, channel_id=settings.DISCORD_ALERT_CHANNEL_ID)
+            )
+            logger.info("Attached Discord Bot provider to TradingView Webhook Queue (Target Channel: %s)", settings.DISCORD_ALERT_CHANNEL_ID)
+
         async def _run_bot():
             try:
                 logger.info("Attempting to connect Discord Bot to Discord Gateway...")

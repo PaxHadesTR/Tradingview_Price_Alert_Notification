@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from typing import List, Optional
 import discord
@@ -12,10 +13,68 @@ from app.services.alert_engine import AutonomousAlertEngine
 logger = logging.getLogger(__name__)
 
 
+def format_price(price: Optional[float]) -> str:
+    """Format price nicely for both small crypto fractions and large indices."""
+    if price is None:
+        return "*Alınamadı*"
+    if price >= 1000.0:
+        return f"${price:,.2f}"
+    if price >= 1.0:
+        return f"${price:,.4f}"
+    return f"${price:.8f}".rstrip("0")
+
+
 async def symbol_autocomplete_handler(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
     """Provide real-time symbol search suggestions for slash commands."""
     suggestions = get_symbol_autocomplete(current)
     return [app_commands.Choice(name=label, value=val) for label, val in suggestions]
+
+
+class RearmAlertModal(discord.ui.Modal, title="🔄 Alarmı Yeniden Kur"):
+    """Interactive modal allowing the user to set a new target price or percent on rearm."""
+
+    target_price = discord.ui.TextInput(
+        label="Hedef Fiyat veya Değişim",
+        placeholder="Örn: 72000, 150.5, +5%, -3%, 70k",
+        required=True,
+        max_length=30,
+    )
+    note = discord.ui.TextInput(
+        label="Hatırlatıcı Not (İsteğe Bağlı)",
+        placeholder="Örn: Direnç kırılımı, kâr al...",
+        required=False,
+        max_length=150,
+        style=discord.TextStyle.short,
+    )
+
+    def __init__(self, engine: AutonomousAlertEngine, alert: AlertRecord):
+        super().__init__()
+        self.engine = engine
+        self.alert = alert
+        self.target_price.default = f"{alert.target_price:g}"
+        if alert.note:
+            self.note.default = alert.note
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        success, msg, new_record = await self.engine.create_user_alert(
+            user_id=str(interaction.user.id),
+            user_name=interaction.user.name,
+            channel_id=str(interaction.channel_id),
+            guild_id=str(interaction.guild_id) if interaction.guild else None,
+            raw_symbol=self.alert.symbol,
+            target_price=self.target_price.value.strip(),
+            note=self.note.value.strip() or None,
+            notify_dm=self.alert.notify_dm,
+        )
+        if success and new_record:
+            await interaction.followup.send(
+                f"✅ **{new_record.symbol}** için alarm yeniden aktif edildi!\n"
+                f"🎯 **Hedef:** `{format_price(new_record.target_price)}` | 📊 **Yön:** `{new_record.direction}` | 🆔 ID: `#{new_record.id}`",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(f"❌ Alarm kurulamadı: {msg}", ephemeral=True)
 
 
 class AlertDeleteDropdown(discord.ui.Select):
@@ -29,9 +88,9 @@ class AlertDeleteDropdown(discord.ui.Select):
         for a in alerts[:25]:  # Discord select menu max is 25 items
             options.append(
                 discord.SelectOption(
-                    label=f"ID #{a.id} • {a.symbol} (${a.target_price:,.4f})",
+                    label=f"ID #{a.id} • {a.symbol} ({format_price(a.target_price)})",
                     value=str(a.id),
-                    description=f"{a.direction} | Başlangıç: ${a.initial_price:,.4f}",
+                    description=f"{a.direction} | Başlangıç: {format_price(a.initial_price)}",
                     emoji="🗑",
                 )
             )
@@ -79,31 +138,176 @@ class AlertActionView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Yeniden Kur", style=discord.ButtonStyle.green, custom_id="btn_rearm")
     async def rearm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        success, msg, new_record = await self.engine.create_user_alert(
-            user_id=str(interaction.user.id),
-            user_name=interaction.user.name,
-            channel_id=str(interaction.channel_id),
-            guild_id=str(interaction.guild_id) if interaction.guild else None,
-            raw_symbol=self.alert.symbol,
-            target_price=self.alert.target_price,
-            note=self.alert.note,
-            notify_dm=self.alert.notify_dm,
-        )
-        if success and new_record:
-            button.disabled = True
-            await interaction.response.edit_message(view=self)
-            await interaction.followup.send(
-                f"✅ **{self.alert.symbol}** için alarm yeniden aktif edildi! (ID: `#{new_record.id}`, Hedef: `${new_record.target_price:,.4f}`)",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(f"❌ Yeniden kurulamadı: {msg}", ephemeral=True)
+        await interaction.response.send_modal(RearmAlertModal(self.engine, self.alert))
 
-    @discord.ui.button(label="🗑 Temizle", style=discord.ButtonStyle.secondary, custom_id="btn_dismiss")
+    @discord.ui.button(label="🗑 Kapat", style=discord.ButtonStyle.secondary, custom_id="btn_dismiss")
     async def dismiss_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(view=self)
+
+
+class HelpCategorySelect(discord.ui.Select):
+    """Interactive help dropdown switching between topic embeds."""
+
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Genel Bakış & Hızlı Başlangıç", value="overview", emoji="🚀"),
+            discord.SelectOption(label="Fiyat Alarmları (/alert)", value="alerts", emoji="🎯"),
+            discord.SelectOption(label="Fiyat & Takip Listesi (/price, /watchlist)", value="market", emoji="💰"),
+            discord.SelectOption(label="Desteklenen Semboller & Örnekler", value="symbols", emoji="📊"),
+            discord.SelectOption(label="TradingView Webhook Entegrasyonu", value="tradingview", emoji="🔔"),
+        ]
+        super().__init__(placeholder="Bir yardım kategorisi seçin...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        cat = self.values[0]
+        if cat == "overview":
+            embed = discord.Embed(
+                title="🚀 TradingView & Autonomous Market Bot Rehberi",
+                description=(
+                    "Bu bot; Kripto, Borsa İstanbul (BIST), Emtia (Altın, Petrol), Dünya Endeksleri ve Döviz kurlarını "
+                    "7/24 otonom olarak takip eden ve TradingView webhook sinyallerini Discord kanalınıza ileten profesyonel bir asistandır."
+                ),
+                color=0x00D26A,
+            )
+            embed.add_field(
+                name="⚡ Temel Yetenekler",
+                value=(
+                    "• **Otonom Fiyat Alarmları:** İstediğiniz fiyata veya yüzdesel değişime (`+5%`, `-3%`) alarm kurun.\n"
+                    "• **Zengin Varlık Yelpazesi:** 120+ Kripto, 100+ BIST hissesi, Nasdaq, Dow Jones, Altın, Petrol, Döviz.\n"
+                    "• **Kişisel Takip Listesi:** `/watchlist` ile portföyünüzün anlık değerlerini tek ekranda görün.\n"
+                    "• **Özel Mesaj (DM) Desteği:** Alarmları sunucu yerine doğrudan özel mesajla alın.\n"
+                    "• **TradingView Köprüsü:** Pine Script ve TradingView strateji sinyallerini anında iletin."
+                ),
+                inline=False,
+            )
+        elif cat == "alerts":
+            embed = discord.Embed(
+                title="🎯 Fiyat Alarmı Komutları (/alert)",
+                description="İstediğiniz varlık için anlık fiyat takip alarmları oluşturun ve yönetin:",
+                color=0x3399FF,
+            )
+            embed.add_field(
+                name="🟢 /alert set",
+                value=(
+                    "Yeni bir alarm kurar.\n"
+                    "• **Fiyat Örnekleri:** `70000`, `150.5`, `310,50`, `70k`\n"
+                    "• **Yüzdesel Hedef:** `+5%` (anlık fiyattan %5 yukarı), `-3%` (%3 düşüş)\n"
+                    "• **Parametreler:** `symbol`, `target_price`, `note` (isteğe bağlı), `dm: True` (isteğe bağlı)"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="📋 /alert list",
+                value="Kurduğunuz alarmları, anlık piyasa fiyatını ve hedefe olan mesafeyi listeler. Açılır menüden tek tıkla silebilirsiniz.",
+                inline=False,
+            )
+            embed.add_field(
+                name="🗑 /alert clear",
+                value="Tetiklenmiş eski alarmlarınızı veya tüm alarmlarınızı topluca temizler.",
+                inline=False,
+            )
+            embed.add_field(
+                name="❌ /alert delete",
+                value="Belirli bir alarmı ID numarasıyla iptal eder (Örn: `/alert delete alert_id:5`).",
+                inline=False,
+            )
+        elif cat == "market":
+            embed = discord.Embed(
+                title="💰 Fiyat Sorgulama & Takip Listesi",
+                color=0xF1C40F,
+            )
+            embed.add_field(
+                name="🔍 /price",
+                value=(
+                    "Herhangi bir sembolün güncel fiyatını anında sorgular.\n"
+                    "• **Örnekler:** `/price symbol:BTC`, `/price symbol:THYAO`, `/price symbol:GOLD`, `/price symbol:NASDAQ`"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="⭐ /watchlist show",
+                value="Kişisel listenizdeki tüm hisse, kripto ve emtiaların güncel fiyatlarını tablo halinde gösterir.",
+                inline=False,
+            )
+            embed.add_field(
+                name="➕ /watchlist add & remove",
+                value=(
+                    "• `/watchlist add symbol:BTC` -> Takip listenize ekler.\n"
+                    "• `/watchlist remove symbol:BTC` -> Listenizden çıkarır."
+                ),
+                inline=False,
+            )
+        elif cat == "symbols":
+            embed = discord.Embed(
+                title="📊 Desteklenen Sembol Formatları",
+                description="Sembolleri yazarken Discord otomatik tamamlama (Autocomplete) önerilerini kullanabilirsiniz:",
+                color=0x9B59B6,
+            )
+            embed.add_field(
+                name="🪙 Kripto Paralar (Binance)",
+                value="`BTC`, `ETH`, `SOL`, `PEPE`, `SUI`, `AVAX`, `DOGE`, `TON`, `RENDER`, `TAO`, `NEAR` vb. (Doğrudan kısaltma yeterlidir).",
+                inline=False,
+            )
+            embed.add_field(
+                name="🇹🇷 Borsa İstanbul (BIST)",
+                value="`THYAO`, `ASELS`, `GARAN`, `EREGL`, `SISE`, `KCHOL`, `TUPRS`, `ASTOR`, `REEDR`, `XU100`, `XU030` vb. (Sonuna `.IS` yazmanız gerekmez).",
+                inline=False,
+            )
+            embed.add_field(
+                name="🏆 Emtialar",
+                value="`GOLD` veya `ALTIN` (Ons Altın), `SILVER` veya `GUMUS`, `BRENT` (Ham Petrol), `NATGAS` (Doğal Gaz), `COPPER` (Bakır).",
+                inline=False,
+            )
+            embed.add_field(
+                name="🌐 Dünya Endeksleri & Döviz",
+                value="`NASDAQ`, `DJI` (Dow Jones / US30), `SP500`, `DAX`, `DXY` (Dolar Endeksi), `USDTRY`, `EURTRY`, `EURUSD`.",
+                inline=False,
+            )
+        elif cat == "tradingview":
+            embed = discord.Embed(
+                title="🔔 TradingView Webhook Kurulumu",
+                description="TradingView alarmlarınızı bot üzerinden Discord'a yönlendirmek için:",
+                color=0x1E88E5,
+            )
+            embed.add_field(
+                name="1. Webhook URL Formatı",
+                value="`https://sizin-coolify-domaininiz.com/webhook/GIZLI_TOKENINIZ`\n*(Veya `?secret=GIZLI_TOKENINIZ` şeklinde)*",
+                inline=False,
+            )
+            embed.add_field(
+                name="2. TradingView Alarm Mesajı (JSON Şablonu)",
+                value=(
+                    "```json\n"
+                    "{\n"
+                    '  "ticker": "{{ticker}}",\n'
+                    '  "action": "{{strategy.order.action}}",\n'
+                    '  "price": {{close}},\n'
+                    '  "strategy": "SuperTrend 15m",\n'
+                    '  "timeframe": "{{interval}}",\n'
+                    '  "message": "Kesişim sinyali gerçekleşti!"\n'
+                    "}\n"
+                    "```"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="3. Düz Metin Desteği",
+                value="JSON kullanmak istemiyorsanız TradingView mesajına doğrudan `BTCUSDT BUY 68500 Kırılım` yazabilirsiniz.",
+                inline=False,
+            )
+
+        embed.set_footer(text="Daha fazla yardım için /help komutunu tekrar çalıştırabilirsiniz.")
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class HelpView(discord.ui.View):
+    """View containing the help category dropdown."""
+
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(HelpCategorySelect())
 
 
 class DiscordAlertBot(commands.Bot):
@@ -115,6 +319,7 @@ class DiscordAlertBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents, proxy=proxy_url)
         self.engine = engine
         self.settings = settings
+        self.start_time = time.time()
         self.engine.trigger_callback = self.dispatch_alert_notification
         if proxy_url:
             logger.info("Discord Bot configured with outbound proxy: %s", proxy_url)
@@ -122,11 +327,26 @@ class DiscordAlertBot(commands.Bot):
     async def setup_hook(self) -> None:
         """Register slash command groups and sync tree."""
         self._register_commands()
+        self._setup_error_handler()
         try:
             synced = await self.tree.sync()
             logger.info("Synced %d Discord Slash Commands.", len(synced))
         except Exception as e:
-            logger.warning("Failed syncing slash command tree (bot might lack permissions or offline): %s", e)
+            logger.warning("Failed syncing slash command tree: %s", e)
+
+    def _setup_error_handler(self) -> None:
+        """Global error handler for slash commands."""
+        @self.tree.error
+        async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+            logger.error("Error executing command %s: %s", interaction.command.name if interaction.command else "unknown", error, exc_info=True)
+            msg = f"⚠️ Komut işlenirken bir hata oluştu: {error}"
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(msg, ephemeral=True)
+            except Exception:
+                pass
 
     async def on_ready(self) -> None:
         """Invoked when bot successfully logs into Discord Gateway and goes Online."""
@@ -135,7 +355,7 @@ class DiscordAlertBot(commands.Bot):
             await self.change_presence(
                 activity=discord.Activity(
                     type=discord.ActivityType.watching,
-                    name="Piyasalar | /alert",
+                    name="Piyasalar | /alert | /help",
                 ),
                 status=discord.Status.online,
             )
@@ -144,14 +364,14 @@ class DiscordAlertBot(commands.Bot):
 
     def _register_commands(self) -> None:
         """Define all slash commands and command groups."""
-        alert_group = app_commands.Group(name="alert", description="Fiyat alarmı komutları")
-        watchlist_group = app_commands.Group(name="watchlist", description="Kişisel takip listesi komutları")
+        alert_group = app_commands.Group(name="alert", description="Fiyat alarmı kurma, listeleme ve yönetme komutları")
+        watchlist_group = app_commands.Group(name="watchlist", description="Kişisel varlık takip listesi komutları")
 
         # --- /alert set ---
-        @alert_group.command(name="set", description="Yeni bir fiyat alarmı kurar (Kripto, BIST, Hisse, Altın, Döviz)")
+        @alert_group.command(name="set", description="Yeni bir fiyat alarmı kurar (Kripto, BIST, Altın, Döviz, Endeks)")
         @app_commands.describe(
-            symbol="İşlem çifti veya sembol (Örn: BTCUSDT, THYAO, USDTRY, NASDAQ, GOLD)",
-            target_price="Alarmın tetikleneceği hedef fiyat",
+            symbol="İşlem çifti veya sembol (Örn: BTC, THYAO, USDTRY, NASDAQ, GOLD)",
+            target_price="Hedef fiyat veya yüzde (Örn: 70000, 150.5, +5%, -3%, 70k)",
             note="Alarm için isteğe bağlı hatırlatıcı not",
             dm="Tetiklendiğinde doğrudan özel mesaj (DM) ile bildirilsin mi? (Varsayılan: Hayır)",
         )
@@ -159,7 +379,7 @@ class DiscordAlertBot(commands.Bot):
         async def set_alert(
             interaction: discord.Interaction,
             symbol: str,
-            target_price: float,
+            target_price: str,
             note: Optional[str] = None,
             dm: Optional[bool] = False,
         ):
@@ -181,13 +401,19 @@ class DiscordAlertBot(commands.Bot):
 
             direction_tr = "🟢 Yükseliş Kırılımı (ABOVE)" if record.direction == "ABOVE" else "🔴 Düşüş Kırılımı (BELOW)"
             dm_badge = " • 📬 DM Bildirimi Aktif" if record.notify_dm else ""
+            pct_distance = ((record.target_price - record.initial_price) / record.initial_price) * 100
+
             embed = discord.Embed(
                 title=f"🎯 Alarm Kuruldu: {record.symbol}",
                 color=0x00FF88 if record.direction == "ABOVE" else 0xFF3366,
                 timestamp=datetime.fromisoformat(record.created_at),
             )
-            embed.add_field(name="💵 Güncel Fiyat", value=f"`${record.initial_price:,.4f}`", inline=True)
-            embed.add_field(name="🎯 Hedef Fiyat", value=f"`${record.target_price:,.4f}`", inline=True)
+            embed.add_field(name="💵 Güncel Fiyat", value=f"`{format_price(record.initial_price)}`", inline=True)
+            embed.add_field(
+                name="🎯 Hedef Fiyat",
+                value=f"`{format_price(record.target_price)}` (`{pct_distance:+.2f}%`)",
+                inline=True,
+            )
             embed.add_field(name="📊 Beklenen Yön", value=f"`{direction_tr}`", inline=False)
             if record.note:
                 embed.add_field(name="📝 Not", value=f"> {record.note}", inline=False)
@@ -199,9 +425,9 @@ class DiscordAlertBot(commands.Bot):
         @alert_group.command(name="list", description="Kurduğunuz alarmları listeler ve tek tıkla silme menüsü sunar")
         @app_commands.describe(status="Listelenecek alarm durumu (Varsayılan: Sadece aktifler)")
         @app_commands.choices(status=[
-            app_commands.Choice(name="Aktif Alarmlar", value="ACTIVE"),
-            app_commands.Choice(name="Tetiklenmiş Alarmlar", value="TRIGGERED"),
-            app_commands.Choice(name="Tüm Alarmlar", value="ALL"),
+            app_commands.Choice(name="🟢 Aktif Alarmlar", value="ACTIVE"),
+            app_commands.Choice(name="⚡ Tetiklenmiş Alarmlar", value="TRIGGERED"),
+            app_commands.Choice(name="📋 Tüm Alarmlar", value="ALL"),
         ])
         async def list_alerts(interaction: discord.Interaction, status: Optional[str] = "ACTIVE"):
             await interaction.response.defer(ephemeral=True)
@@ -223,17 +449,16 @@ class DiscordAlertBot(commands.Bot):
                 note_str = f"\n> 📝 *{a.note}*" if a.note else ""
                 dm_str = " 📬" if a.notify_dm else ""
 
-                # Fetch live price if active
                 current_price = await self.engine.feed.get_current_price(a.symbol)
                 if current_price is not None and a.status == "ACTIVE":
                     pct_distance = ((a.target_price - current_price) / current_price) * 100
                     dist_str = f" (Fark: `{pct_distance:+.2f}%`)"
-                    price_line = f"Anlık: `${current_price:,.4f}`{dist_str} | Başlangıç: `${a.initial_price:,.4f}`"
+                    price_line = f"Anlık: `{format_price(current_price)}`{dist_str} | Başlangıç: `{format_price(a.initial_price)}`"
                 else:
-                    price_line = f"Başlangıç: `${a.initial_price:,.4f}`"
+                    price_line = f"Başlangıç: `{format_price(a.initial_price)}`"
 
                 embed.add_field(
-                    name=f"{status_icon} ID `#{a.id}`: {a.symbol} {arrow} `${a.target_price:,.4f}`{dm_str}",
+                    name=f"{status_icon} ID `#{a.id}`: {a.symbol} {arrow} `{format_price(a.target_price)}`{dm_str}",
                     value=f"Durum: `{a.status}` | {price_line}{note_str}",
                     inline=False,
                 )
@@ -243,6 +468,23 @@ class DiscordAlertBot(commands.Bot):
 
             view = AlertListView(self.engine, alerts, str(interaction.user.id))
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        # --- /alert clear ---
+        @alert_group.command(name="clear", description="Geçmiş veya tüm alarmlarınızı topluca temizler")
+        @app_commands.describe(scope="Temizlenecek alarm türü (Varsayılan: Sadece tetiklenmişler)")
+        @app_commands.choices(scope=[
+            app_commands.Choice(name="⚡ Sadece Tetiklenmiş Alarmları Temizle", value="TRIGGERED"),
+            app_commands.Choice(name="🟢 Sadece Aktif Alarmları İptal Et", value="ACTIVE"),
+            app_commands.Choice(name="💥 TÜM Alarmlarımı Temizle (Aktif + Tetiklenmiş)", value="ALL"),
+        ])
+        async def clear_alerts(interaction: discord.Interaction, scope: Optional[str] = "TRIGGERED"):
+            await interaction.response.defer(ephemeral=True)
+            deleted_count = await self.engine.db.clear_user_alerts(user_id=str(interaction.user.id), status=scope)
+            if deleted_count > 0:
+                scope_tr = "Tetiklenmiş" if scope == "TRIGGERED" else ("Aktif" if scope == "ACTIVE" else "Tüm")
+                await interaction.followup.send(f"🗑 **{deleted_count}** adet {scope_tr} alarm başarıyla temizlendi.", ephemeral=True)
+            else:
+                await interaction.followup.send("ℹ️ Temizlenecek uygun alarm bulunamadı.", ephemeral=True)
 
         # --- /alert delete ---
         @alert_group.command(name="delete", description="Belirli bir alarmı ID ile iptal eder")
@@ -276,7 +518,7 @@ class DiscordAlertBot(commands.Bot):
                 color=0x3399FF,
                 timestamp=datetime.now(),
             )
-            embed.add_field(name="Anlık Değer", value=f"`${current_price:,.4f}`", inline=True)
+            embed.add_field(name="Anlık Değer", value=f"`{format_price(current_price)}`", inline=True)
             await interaction.followup.send(embed=embed)
 
         # --- /watchlist show ---
@@ -301,8 +543,7 @@ class DiscordAlertBot(commands.Bot):
 
             for sym in symbols:
                 price = await self.engine.feed.get_current_price(sym)
-                price_str = f"`${price:,.4f}`" if price is not None else "*Fiyat alınamadı*"
-                embed.add_field(name=f"🔹 {sym}", value=price_str, inline=True)
+                embed.add_field(name=f"🔹 {sym}", value=f"`{format_price(price)}`", inline=True)
 
             embed.set_footer(text=f"Toplam: {len(symbols)} varlık • /watchlist")
             await interaction.followup.send(embed=embed)
@@ -318,7 +559,7 @@ class DiscordAlertBot(commands.Bot):
 
             if success:
                 price = await self.engine.feed.get_current_price(norm_symbol)
-                price_info = f" (Anlık: `${price:,.4f}`)" if price is not None else ""
+                price_info = f" (Anlık: `{format_price(price)}`)" if price is not None else ""
                 await interaction.followup.send(
                     f"⭐ **{norm_symbol}** takip listenize eklendi!{price_info}",
                     ephemeral=True,
@@ -343,6 +584,52 @@ class DiscordAlertBot(commands.Bot):
             else:
                 await interaction.followup.send(f"❌ **{norm_symbol}** takip listenizde bulunamadı.", ephemeral=True)
 
+        # --- /help ---
+        @self.tree.command(name="help", description="Bot özellikleri, komutlar ve sembol kullanım rehberi")
+        async def help_command(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            embed = discord.Embed(
+                title="📖 TradingView & Market Alert Bot Rehberi",
+                description=(
+                    "Aşağıdaki açılır menüden ilgilendiğiniz kategoriyi seçerek detaylı bilgi edinebilirsiniz:\n\n"
+                    "• 🚀 **Genel Bakış & Hızlı Başlangıç**\n"
+                    "• 🎯 **Fiyat Alarmları (`/alert`)**\n"
+                    "• 💰 **Fiyat & Takip Listesi (`/price`, `/watchlist`)**\n"
+                    "• 📊 **Desteklenen Semboller & Örnekler**\n"
+                    "• 🔔 **TradingView Webhook Entegrasyonu**"
+                ),
+                color=0x00D26A,
+            )
+            embed.set_footer(text="Bir kategori seçmek için aşağıdaki menüyü kullanın.")
+            view = HelpView()
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        # --- /stats ---
+        @self.tree.command(name="stats", description="Sistem durumu, gecikme süresi, aktif alarm sayıları ve istatistikler")
+        async def stats_command(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=False)
+            db_stats = await self.engine.db.get_database_stats()
+            uptime_seconds = int(time.time() - self.start_time)
+            uptime_hours, rem = divmod(uptime_seconds, 3600)
+            uptime_mins, uptime_secs = divmod(rem, 60)
+
+            latency_ms = round(self.latency * 1000, 1) if self.latency else 0.0
+
+            embed = discord.Embed(
+                title="📊 Sistem ve Bot İstatistikleri",
+                color=0x3399FF,
+                timestamp=datetime.now(),
+            )
+            embed.add_field(name="🏓 Ağ Gecikmesi (Ping)", value=f"`{latency_ms} ms`", inline=True)
+            embed.add_field(name="⏱ Çalışma Süresi (Uptime)", value=f"`{uptime_hours}s {uptime_mins}d {uptime_secs}sn`", inline=True)
+            embed.add_field(name="🟢 Aktif Alarmlar", value=f"`{db_stats['active_alerts']}` adet", inline=True)
+            embed.add_field(name="⚡ Tetiklenmiş Alarmlar", value=f"`{db_stats['triggered_alerts']}` adet", inline=True)
+            embed.add_field(name="⭐ Takip Listesi Varlıkları", value=f"`{db_stats['watchlist_items']}` adet", inline=True)
+            embed.add_field(name="🌐 Piyasa Beslemesi", value="`Binance WS + Yahoo Poller`", inline=True)
+            embed.set_footer(text="TradingView Price Alert & Market Engine")
+
+            await interaction.followup.send(embed=embed)
+
         self.tree.add_command(alert_group)
         self.tree.add_command(watchlist_group)
 
@@ -352,16 +639,17 @@ class DiscordAlertBot(commands.Bot):
         direction_label = "Yükseliş Kırılımı (ABOVE)" if is_bullish else "Düşüş Kırılımı (BELOW)"
         color = 0x00FF88 if is_bullish else 0xFF3366
         icon = "🚀" if is_bullish else "⚠️"
+        pct_change = ((current_price - alert.initial_price) / alert.initial_price) * 100
 
         embed = discord.Embed(
             title=f"{icon} FİYAT ALARMI TETİKLENDİ: {alert.symbol}",
-            description=f"> **{alert.symbol}** hedef fiyata ulaştı!",
+            description=f"> **{alert.symbol}** hedef fiyata ulaştı! (`{pct_change:+.2f}%`)",
             color=color,
             timestamp=datetime.now(),
         )
-        embed.add_field(name="🎯 Hedef Fiyat", value=f"`${alert.target_price:,.4f}`", inline=True)
-        embed.add_field(name="⚡ Tetiklenme Fiyatı", value=f"`${current_price:,.4f}`", inline=True)
-        embed.add_field(name="💵 Başlangıç Fiyatı", value=f"`${alert.initial_price:,.4f}`", inline=True)
+        embed.add_field(name="🎯 Hedef Fiyat", value=f"`{format_price(alert.target_price)}`", inline=True)
+        embed.add_field(name="⚡ Tetiklenme Fiyatı", value=f"`{format_price(current_price)}`", inline=True)
+        embed.add_field(name="💵 Başlangıç Fiyatı", value=f"`{format_price(alert.initial_price)}`", inline=True)
         embed.add_field(name="📊 Hareket Yönü", value=f"`{direction_label}`", inline=False)
 
         if alert.note:

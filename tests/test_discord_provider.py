@@ -89,3 +89,27 @@ async def test_discord_rate_limit_retry():
         success = await provider.send(alert)
         assert success is True
         assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_discord_bot_notification_provider():
+    from app.providers.discord import DiscordBotNotificationProvider
+
+    sent_messages = []
+
+    class DummyChannel:
+        async def send(self, embed=None, content=None):
+            sent_messages.append(embed)
+
+    class DummyBot:
+        def get_channel(self, cid):
+            return DummyChannel() if cid == 999 else None
+        async def fetch_channel(self, cid):
+            return self.get_channel(cid)
+
+    provider = DiscordBotNotificationProvider(bot=DummyBot(), channel_id=999)
+    alert = AlertPayload(ticker="BTCUSDT", action="BUY", price=68000, message="Breakout test")
+    success = await provider.send(alert)
+    assert success is True
+    assert len(sent_messages) == 1
+    assert "BTCUSDT" in sent_messages[0].title

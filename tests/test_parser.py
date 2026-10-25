@@ -92,3 +92,23 @@ def test_parse_bytes_input():
     assert alert.ticker == "XRPUSDT"
     assert alert.action == "BUY"
     assert alert.price == 0.55
+
+
+def test_parse_markdown_code_block():
+    raw = "```json\n{\"ticker\": \"SOLUSDT\", \"action\": \"BUY\", \"price\": \"$150.50\"}\n```"
+    alert = parse_tradingview_payload(raw)
+    assert alert.ticker == "SOLUSDT"
+    assert alert.action == "BUY"
+    assert alert.price == 150.50
+
+
+def test_parse_comma_decimal_and_currency_symbols():
+    raw = '{"symbol": "THYAO", "action": "BUY", "price": "310,50 TL"}'
+    alert = parse_tradingview_payload(raw)
+    assert alert.ticker == "THYAO"
+    assert alert.price == 310.50
+
+    raw_text = "BTCUSDT BUY 68000,50 Breakout"
+    alert_text = parse_tradingview_payload(raw_text)
+    assert alert_text.ticker == "BTCUSDT"
+    assert alert_text.price == 68000.50

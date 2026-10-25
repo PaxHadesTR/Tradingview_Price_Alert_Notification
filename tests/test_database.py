@@ -121,3 +121,54 @@ async def test_watchlist_crud(temp_db: AlertDatabase):
     updated = await temp_db.get_user_watchlist("user_1")
     assert len(updated) == 1
     assert "BTCUSDT" not in updated
+
+
+@pytest.mark.asyncio
+async def test_clear_alerts_and_stats(temp_db: AlertDatabase):
+    # Setup multiple alerts
+    a1 = await temp_db.add_alert(
+        user_id="u_test", user_name="User", channel_id="c1", guild_id="g1",
+        symbol="BTCUSDT", asset_type="CRYPTO", target_price=70000, initial_price=65000, direction="ABOVE",
+    )
+    a2 = await temp_db.add_alert(
+        user_id="u_test", user_name="User", channel_id="c1", guild_id="g1",
+        symbol="ETHUSDT", asset_type="CRYPTO", target_price=4000, initial_price=3500, direction="ABOVE",
+    )
+    # Trigger a1
+    await temp_db.trigger_alert(a1)
+
+    # Database stats check
+    stats = await temp_db.get_database_stats()
+    assert stats["total_alerts"] >= 2
+    assert stats["active_alerts"] >= 1
+    assert stats["triggered_alerts"] >= 1
+
+    # Clear TRIGGERED
+    cleared = await temp_db.clear_user_alerts(user_id="u_test", status="TRIGGERED")
+    assert cleared == 1
+
+    # Only ACTIVE (a2) remains
+    remaining = await temp_db.get_user_alerts(user_id="u_test")
+    assert len(remaining) == 1
+    assert remaining[0].id == a2
+
+    # Clear ALL
+    cleared_all = await temp_db.clear_user_alerts(user_id="u_test", status="ALL")
+    assert cleared_all == 1
+
+    # User alerts now 0
+    assert len(await temp_db.get_user_alerts(user_id="u_test")) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_all_watchlist_symbols(temp_db: AlertDatabase):
+    await temp_db.add_to_watchlist("user_a", "THYAO.IS", "EQUITY_FOREX")
+    await temp_db.add_to_watchlist("user_b", "THYAO.IS", "EQUITY_FOREX")
+    await temp_db.add_to_watchlist("user_b", "GOLD", "EQUITY_FOREX")
+    await temp_db.add_to_watchlist("user_c", "BTCUSDT", "CRYPTO")
+
+    all_equities = await temp_db.get_all_watchlist_symbols(asset_type="EQUITY_FOREX")
+    assert len(all_equities) == 2
+    assert "THYAO.IS" in all_equities
+    assert "GOLD" in all_equities
+    assert "BTCUSDT" not in all_equities

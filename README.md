@@ -1,8 +1,8 @@
 # Autonomous Market Price Alert & Discord Bot Engine
 
-A high-performance, self-hosted, autonomous price monitoring and notification service designed to bypass TradingView free-tier alert limits.
+A high-performance, self-hosted, autonomous price monitoring and notification service designed to bypass TradingView free-tier alert limits and provide institutional-grade alerts on your own infrastructure.
 
-Run your own alert service 24/7 on **Coolify** or Docker. Set alerts for **Crypto (Binance)**, **Borsa Istanbul (BIST)**, **US Equities**, **Forex**, and **Commodities (Gold/Silver/Oil)** directly from **Discord** via modern Slash Commands.
+Run your own alert service 24/7 on **Coolify** or Docker. Set alerts for **Crypto (Binance)**, **Borsa Istanbul (BIST)**, **US Equities**, **Forex**, and **Commodities (Gold/Silver/Oil)** directly from **Discord** via modern Slash Commands, or route your **TradingView Webhooks** directly into Discord.
 
 ---
 
@@ -34,96 +34,145 @@ Konteynerler ayağa kalktığında bot otomatik olarak `warp` proxy'si üzerinde
 
 ---
 
-## Key Features
+## 🌟 Öne Çıkan Özellikler (Key Features)
 
-1. **Independent of TradingView Plan Limits**:
-   - Free TradingView accounts limit you to 1 or very few alerts. This service tracks unlimited alerts on your own infrastructure for $0.
-2. **Hybrid Real-Time Market Feeds**:
-   - **Binance WebSocket Stream (`!miniTicker@arr`)**: Sub-second ticker stream for all Binance crypto pairs with zero API key required.
-   - **Yahoo Finance Async REST Feed**: Periodic polling for non-crypto assets (BIST `.IS`, US Stocks, Forex `=X`, Gold `GC=F`).
-3. **Interactive Discord Bot with Slash Commands**:
-   - `/alert set <symbol> <target_price> [note] [dm]`: Auto-detects whether it is an `ABOVE` breakout or `BELOW` breakdown. Optional `dm:True` sends notification directly to your Discord DMs.
-   - `/alert list [status]`: Shows active/triggered alerts with live prices, percentage distance to target, and an interactive **Dropdown Menu** to delete alerts with 1-click.
-   - `/alert delete <alert_id>`: Cancel any alert by ID.
-   - `/watchlist show`: Instant dashboard showing live prices for all assets on your personal watchlist.
-   - `/watchlist add <symbol>` & `/watchlist remove <symbol>`: Manage your favorite assets.
-   - `/price <symbol>`: Check live price for any asset.
-   - **Real-Time Autocomplete**: Suggests popular Crypto, BIST stocks, US equities, commodities, and indices as you type.
-   - **Interactive Buttons**: Dispatched notifications feature "🔄 Yeniden Kur" and "🗑 Temizle" buttons.
-4. **Quota & Stale Alert Protections**:
-   - Configurable `MAX_ACTIVE_ALERTS` (e.g. 100) to protect server resources.
-   - Automatic expiration cleaner for forgotten alerts older than `ALERT_EXPIRY_DAYS` (e.g. 180 days / 6 months).
-5. **Persistent SQLite Database**:
-   - Uses `aiosqlite` with Write-Ahead Logging (`PRAGMA journal_mode=WAL`) in `./data/alerts.db`, ensuring alerts and watchlists survive container redeployments.
-6. **Coolify-Ready**:
-   - Multi-stage non-root `Dockerfile`, `/healthz` and `/live` probes, and `docker-compose.yml` with persistent volume mapping.
-7. **Backwards Compatible Webhook Ingestion**:
-   - Still supports receiving standard TradingView webhooks (`/webhook/{secret_token}`).
+1. **TradingView Plan Limitlerine Son**:
+   - Ücretsiz TradingView hesaplarındaki 1 alarm sınırına takılmadan, kendi sunucunuzda sınırsız sayıda alarm kurun ve takip edin.
+2. **Hibrit Gerçek Zamanlı Piyasa Beslemesi (Hybrid Feeds)**:
+   - **Binance WebSocket Stream (`!miniTicker@arr`)**: Tüm kripto çiftleri için milisaniyelik canlı fiyat akışı (API key gerektirmez).
+   - **Yahoo Finance Async Poller**: Kripto dışı varlıklar (BIST `.IS`, ABD Hisseleri, Döviz `=X`, Altın/Petrol Vadeli `GC=F`, `BZ=F`, Endeksler) için 20 saniyelik periyodik canlı tarama.
+   - **In-Memory Freshness Cache (20s TTL)**: Fiyat sorgularında eski/bayat fiyat gösterimini önleyen akıllı önbellek mekanizması.
+3. **Gelişmiş Discord Slash Komutları & Kullanıcı Deneyimi**:
+   - `/alert set`: Hedef fiyata veya **yüzdesel değişime** (`+5%`, `-3%`, `150,5`, `70k`) göre alarm kurma. Otomatik yön tayini (`ABOVE` / `BELOW`).
+   - `/alert list`: Canlı fiyatlar, hedefe kalan yüzde mesafesi ve tek tıkla silme sağlayan açılır menü (Dropdown).
+   - `/alert clear`: Tetiklenmiş veya tüm alarmları tek komutla temizleme.
+   - `/alert delete`: ID ile alarm iptali.
+   - `/price`: Herhangi bir varlığın anlık piyasa değerini sorgulama.
+   - `/watchlist show`: Kişisel portföyünüzün anlık değerlerini tek ekranda görme.
+   - `/watchlist add` & `/watchlist remove`: Portföy yönetimi.
+   - `/help`: Kategori bazlı interaktif yardım menüsü (Genel Rehber, Komutlar, Semboller, TradingView Kurulumu).
+   - `/stats`: Bot gecikmesi (ping), çalışma süresi (uptime), aktif alarmlar ve piyasa besleme sağlığı.
+4. **İnteraktif Butonlar & Modallar**:
+   - Alarm tetiklendiğinde mesaj altında **"🔄 Yeniden Kur"** ve **"🗑 Kapat"** butonları belirir.
+   - "Yeniden Kur" butonuna tıklandığında açılan Discord Modal penceresi üzerinden yeni hedef fiyat veya yüzde girilerek alarm anında güncellenebilir.
+5. **Kişisel & Sistem Kota Koruması**:
+   - Sunucu kaynaklarını korumak için sistem genelinde (`MAX_ACTIVE_ALERTS=100`) ve kullanıcı başına (`MAX_USER_ACTIVE_ALERTS=25`) kota koruması.
+   - Unutulan eski alarmlar için otomatik son kullanma temizleyicisi (`ALERT_EXPIRY_DAYS=180`).
+6. **Esnek TradingView Webhook Köprüsü**:
+   - TradingView Pine Script veya alarm mesajlarını (`/webhook/{token}`) üzerinden karşılar.
+   - Eğer `DISCORD_WEBHOOK_URL` tanımlanmamışsa, TradingView sinyallerini otomatik olarak aktif Discord Botu üzerinden hedeflenen kanala iletir!
+7. **Dayanıklı SQLite Veritabanı**:
+   - `aiosqlite` ile WAL modunda çalışan (`alerts.db`), konteyner güncellemelerinde veri kaybını önleyen kalıcı depolama.
 
 ---
 
-## Discord Bot Commands
+## 🎮 Discord Bot Komut Tablosu
 
-| Command | Description | Example |
+| Komut | Açıklama | Örnek Kullanım |
 | :--- | :--- | :--- |
-| `/alert set <symbol> <price> [note] [dm]` | Creates a new price threshold alert with optional DM delivery | `/alert set symbol:BTCUSDT target_price:85000 note:Direnç dm:True` |
-| `/alert list [status]` | Lists alerts with live prices, target distance %, and dropdown delete menu | `/alert list status:Aktif Alarmlar` |
-| `/alert delete <id>` | Cancels an active alert by ID | `/alert delete alert_id:4` |
-| `/price <symbol>` | Instant price query (supports autocomplete) | `/price symbol:SOLUSDT` |
-| `/watchlist show` | Shows live prices for all assets on your personal watchlist | `/watchlist show` |
-| `/watchlist add <symbol>` | Adds a symbol to your watchlist | `/watchlist add symbol:THYAO` |
-| `/watchlist remove <symbol>` | Removes a symbol from your watchlist | `/watchlist remove symbol:THYAO` |
+| `/alert set <symbol> <target> [note] [dm]` | Yeni fiyat alarmı kurar (fiyat veya yüzde kabul eder) | `/alert set symbol:BTC target_price:+5% note:Direnç dm:True` |
+| `/alert list [status]` | Alarmlarınızı canlı fiyat ve kalan fark % ile listeler | `/alert list status:Aktif Alarmlar` |
+| `/alert clear [scope]` | Tetiklenmiş veya tüm alarmlarınızı topluca temizler | `/alert clear scope:Sadece Tetiklenmiş Alarmları Temizle` |
+| `/alert delete <alert_id>` | Belirli bir alarmı ID ile iptal eder | `/alert delete alert_id:4` |
+| `/price <symbol>` | Anlık fiyat sorgular (Autocomplete destekli) | `/price symbol:GOLD` veya `/price symbol:THYAO` |
+| `/watchlist show` | Kişisel takip listenizdeki tüm varlıkların anlık fiyatlarını gösterir | `/watchlist show` |
+| `/watchlist add <symbol>` | Takip listenize yeni bir sembol ekler | `/watchlist add symbol:SOL` |
+| `/watchlist remove <symbol>`| Takip listenizden bir sembolü kaldırır | `/watchlist remove symbol:SOL` |
+| `/help` | İnteraktif açılır menülü detaylı yardım rehberi | `/help` |
+| `/stats` | Sistem gecikmesi (ping), uptime ve alarm istatistikleri | `/stats` |
 
 ---
 
-## Supported Symbol Formats
+## 📈 Desteklenen Semboller ve Yazım Formatları
 
-- **Crypto**: `BTCUSDT`, `ETHUSDT`, `SOLUSDC`, `PEPEUSDT` (or shorthand: `BTC`, `ETH`, `SOL`)
-- **Borsa Istanbul**: `THYAO`, `ASELS`, `GARAN`, `EREGL`, `ALARK` (auto-appends `.IS` if omitted) or `THYAO.IS`
-- **Indices**: `XU100`, `BIST100`, `BIST30`, `NASDAQ`, `NDX`, `SP500`, `DXY`
-- **Forex**: `USDTRY`, `EURTRY`, `EURUSD` (auto-appends `=X`) or `USDTRY=X`
-- **Commodities**: `GOLD` / `ALTIN` / `XAU` (`GC=F`), `SILVER` / `GUMUS` / `XAG` (`SI=F`), `BRENT` (`BZ=F`)
-- **US Stocks**: `AAPL`, `TSLA`, `NVDA`, `MSFT`
+Sistem kullanıcı dostu akıllı sembol ayrıştırıcısına (`symbols.py`) sahiptir. Discord'da arama yaparken otomatik tamamlama listesinden seçim yapabilir veya doğrudan kısaltmasını yazabilirsiniz:
+
+* **🪙 Kripto Paralar (Binance Spot):** `BTC`, `ETH`, `SOL`, `PEPE`, `SUI`, `AVAX`, `DOGE`, `TON`, `RENDER`, `TAO`, `NEAR`, `ARB`, `OP`, `TIA`, `INJ` vb. (Doğrudan kısaltma yeterlidir, otomatik `*USDT` olarak eşlenir).
+* **🇹🇷 Borsa İstanbul (100+ BIST Hissesi):** `THYAO`, `ASELS`, `GARAN`, `EREGL`, `SISE`, `KCHOL`, `TUPRS`, `ASTOR`, `REEDR`, `MIATK`, `EUPWR`, `CCOLA`, `MAVI`, `BIMAS` vb. (Sonuna `.IS` yazmanız gerekmez).
+* **🏆 Emtialar (Commodities):**
+  * `GOLD` veya `ALTIN` (Ons Altın Futures: `GC=F`)
+  * `SILVER` veya `GUMUS` (Ons Gümüş Futures: `SI=F`)
+  * `BRENT` (Brent Petrol: `BZ=F`)
+  * `OIL` veya `WTI` (ABD Ham Petrol: `CL=F`)
+  * `NATGAS` veya `DOGALGAZ` (Doğal Gaz: `NG=F`)
+  * `COPPER` veya `BAKIR` (`HG=F`), `PLATINUM` (`PL=F`), `COFFEE`, `WHEAT`
+* **🌐 Dünya Endeksleri:**
+  * `NASDAQ` (Nasdaq 100 Endeksi: `^NDX`), `NQ` (E-mini Nasdaq Vadeli: `NQ=F`)
+  * `DJI`, `DOW`, `US30` (Dow Jones 30 Endeksi: `^DJI`), `YM` (Dow Jones Vadeli: `YM=F`)
+  * `SP500`, `SPX` (S&P 500: `^GSPC`), `ES` (S&P 500 Vadeli: `ES=F`)
+  * `DAX` / `GER40` (`^GDAXI`), `FTSE` / `UK100` (`^FTSE`), `VIX` (Korku Endeksi), `DXY` (Dolar Endeksi)
+  * `XU100` (BIST 100), `XU030` (BIST 30), `XBANK` (Bankacılık), `XUSIN` (Sınai)
+* **💱 Döviz & Forex Kurları:** `USDTRY`, `EURTRY`, `GBPTRY`, `EURUSD`, `GBPUSD`, `USDJPY` vb. (Otomatik `=X` eklenir).
+* **🇺🇸 ABD Dev Şirketleri:** `NVDA`, `AAPL`, `TSLA`, `MSFT`, `AMZN`, `GOOGL`, `META`, `NFLX`, `AMD`, `PLTR`, `COIN`, `MSTR`
 
 ---
 
-## Coolify & Docker Deployment
+## 🔔 TradingView Webhook Kurulumu
 
-### 1. Discord Bot Token Setup
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Create a **New Application** -> **Bot**.
-3. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
-4. Click **Reset Token** and copy your **Bot Token** into `DISCORD_BOT_TOKEN`.
-5. Under **OAuth2 -> URL Generator**, check `bot` and `applications.commands`.
-   Permissions: `Send Messages`, `Embed Links`, `Attach Files`, `Read Message History`.
-6. Invite the bot to your Discord server using the generated URL.
+TradingView grafik veya Pine Script stratejilerinizden botunuza sinyal göndermek için:
 
-### 2. Coolify Configuration
-In your Coolify service, configure Environment Variables:
+1. **Webhook URL:**
+   ```text
+   https://sizin-coolify-domaininiz.com/webhook/GIZLI_TOKENINIZ
+   ```
+2. **Alarm Mesajı (JSON Formatı):**
+   ```json
+   {
+     "ticker": "{{ticker}}",
+     "action": "{{strategy.order.action}}",
+     "price": {{close}},
+     "strategy": "Trend Takip 15m",
+     "timeframe": "{{interval}}",
+     "message": "Kesişim sinyali onaylandı!"
+   }
+   ```
+3. **Düz Metin Formatı:**
+   Dilerseniz TradingView mesajına doğrudan `BTCUSDT BUY 68500 Direnç Kırılımı` da yazabilirsiniz.
+
+---
+
+## 🚀 Coolify & Docker Dağıtımı
+
+### 1. Discord Bot Token Alma
+1. [Discord Developer Portal](https://discord.com/developers/applications) adresine gidin.
+2. **New Application** -> **Bot** sekmesine geçin.
+3. **Privileged Gateway Intents** altında **Message Content Intent** seçeneğini açın.
+4. **Reset Token** butonuna basarak bot tokeninizi kopyalayın (`DISCORD_BOT_TOKEN`).
+5. **OAuth2 -> URL Generator** kısmında `bot` ve `applications.commands` seçin. İzin olarak `Send Messages`, `Embed Links`, `Attach Files`, `Read Message History` verin.
+6. Üretilen davet linkiyle botu sunucunuza ekleyin.
+
+### 2. Coolify Ortam Değişkenleri (.env)
+Coolify üzerinde aşağıdaki değişkenleri tanımlayın:
 
 ```env
-# Bot & Channel Configuration
-DISCORD_BOT_TOKEN=your_bot_token_from_developer_portal
-DISCORD_ALERT_CHANNEL_ID=your_discord_channel_id_here
+# Bot ve Kanal Ayarları
+DISCORD_BOT_TOKEN=buraya_bot_tokeniniz
+DISCORD_ALERT_CHANNEL_ID=alarmlarin_duyurulacagi_kanal_id
 DISCORD_PROXY=http://warp:1080
 
-# Engine Quotas
+# Sistem ve Kullanıcı Kotaları
 MAX_ACTIVE_ALERTS=100
+MAX_USER_ACTIVE_ALERTS=25
 ALERT_EXPIRY_DAYS=180
+CACHE_TTL_SECONDS=20.0
 SQLITE_DB_PATH=/app/data/alerts.db
 
-# Optional Webhook Forwarding
-WEBHOOK_SECRET=your_secret_passphrase
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+# TradingView Webhook Ayarları (İsteğe Bağlı)
+WEBHOOK_SECRET=buraya_guclu_bir_sifre_veya_token
+# DISCORD_WEBHOOK_URL boş bırakılırsa, TradingView sinyalleri bot üzerinden DISCORD_ALERT_CHANNEL_ID'ye gönderilir!
 ```
-
-Coolify mounts `./data:/app/data` to ensure the SQLite database (`alerts.db`) persists across deployments.
 
 ---
 
-## Running Automated Tests
+## 🧪 Otomatik Testler
+
+Tüm sistem birim ve entegrasyon testleri:
 
 ```bash
 python -m pytest tests -v
 ```
-All 40 tests pass with 100% test coverage for authentication, dual parsers, token bucket rate limiter, SQLite transactions, watchlists, DM flags, symbol classification, and alert triggers.
+
+```text
+======================== 50 passed, 1 warning in 1.43s ========================
+```
+Authentication, dual parser, token bucket rate limiter, SQLite işlemleri, watchlist, DM bildirimleri, yüzdesel alarmlar, cache tazeliği, sembol sınıflandırması ve tetikleyici motoru dahil **50 testin tamamı %100 yeşildir**.

@@ -266,6 +266,68 @@ class AlertDatabase:
                 rows = await cursor.fetchall()
                 return [r[0] for r in rows]
 
+    async def get_all_watchlist_symbols(self, asset_type: Optional[str] = None) -> List[str]:
+        """Fetch all distinct symbols across all user watchlists for background polling."""
+        query = "SELECT DISTINCT symbol FROM watchlist"
+        params = []
+        if asset_type:
+            query += " WHERE asset_type = ?"
+            params.append(asset_type.upper().strip())
+
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [r[0] for r in rows]
+
+    async def clear_user_alerts(self, user_id: str, status: Optional[str] = "TRIGGERED") -> int:
+        """Clear alerts for a user by status (e.g., 'TRIGGERED', 'ACTIVE', or 'ALL')."""
+        async with aiosqlite.connect(self.db_path) as db:
+            if status == "ALL":
+                cursor = await db.execute("DELETE FROM alerts WHERE user_id = ?;", (user_id,))
+            else:
+                cursor = await db.execute(
+                    "DELETE FROM alerts WHERE user_id = ? AND status = ?;",
+                    (user_id, (status or "TRIGGERED").upper().strip()),
+                )
+            await db.commit()
+            return cursor.rowcount
+
+    async def get_database_stats(self) -> dict:
+        """Retrieve high-level statistics about stored alerts and watchlists."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                SELECT
+                    COUNT(*) as total_alerts,
+                    SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END) as active_alerts,
+                    SUM(CASE WHEN status = 'TRIGGERED' THEN 1 ELSE 0 END) as triggered_alerts,
+                    SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled_alerts,
+                    SUM(CASE WHEN status = 'EXPIRED' THEN 1 ELSE 0 END) as expired_alerts
+                FROM alerts;
+                """
+            ) as cursor:
+                row = await cursor.fetchone()
+                total = row[0] or 0
+                active = row[1] or 0
+                triggered = row[2] or 0
+                cancelled = row[3] or 0
+                expired = row[4] or 0
+
+            async with db.execute("SELECT COUNT(DISTINCT user_id), COUNT(*) FROM watchlist;") as cursor:
+                wl_row = await cursor.fetchone()
+                wl_users = wl_row[0] or 0
+                wl_items = wl_row[1] or 0
+
+            return {
+                "total_alerts": total,
+                "active_alerts": active,
+                "triggered_alerts": triggered,
+                "cancelled_alerts": cancelled,
+                "expired_alerts": expired,
+                "watchlist_users": wl_users,
+                "watchlist_items": wl_items,
+            }
+
     def _row_to_record(self, row: aiosqlite.Row) -> AlertRecord:
         notify_dm_val = False
         try:

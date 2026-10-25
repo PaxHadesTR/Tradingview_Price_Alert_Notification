@@ -29,6 +29,12 @@ def parse_tradingview_payload(raw_body: Union[str, bytes, dict]) -> AlertPayload
     if not text:
         return AlertPayload(ticker="EMPTY_ALERT", message="Received empty alert payload.")
 
+    # Strip markdown code blocks if payload is enclosed in ``` or ```json
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+
     # 1. Attempt JSON parsing
     if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
         try:
@@ -85,10 +91,19 @@ def _from_dict(data: Dict[str, Any]) -> AlertPayload:
     )
     price: Optional[float] = None
     if price_val is not None:
-        try:
+        if isinstance(price_val, (int, float)):
             price = float(price_val)
-        except (ValueError, TypeError):
-            price = None
+        else:
+            try:
+                s = str(price_val).strip()
+                s = re.sub(r"[^\d\.,\-]", "", s)
+                if "," in s and "." in s:
+                    s = s.replace(",", "")
+                elif "," in s and "." not in s:
+                    s = s.replace(",", ".")
+                price = float(s)
+            except (ValueError, TypeError):
+                price = None
 
     strategy = (
         data.get("strategy")
@@ -157,9 +172,9 @@ def _extract_key_values(text: str) -> Dict[str, Any]:
 
 
 def _extract_tokens_from_plain_text(text: str) -> Optional[AlertPayload]:
-    """Extract standard pattern like `BTCUSDT BUY 65000` or `ETH/USD SELL @ 3400.20`."""
+    """Extract standard pattern like `BTCUSDT BUY 65000` or `ETH/USD SELL @ 3400,20`."""
     pattern = re.compile(
-        r"^([A-Z0-9_\-\.\/]{2,15})\s+(BUY|SELL|LONG|SHORT|CLOSE|ALERT)\b(?:\s+(?:@\s*)?([0-9]+(?:\.[0-9]+)?))?(.*)$",
+        r"^([A-Z0-9_\-\.\/]{2,15})\s+(BUY|SELL|LONG|SHORT|CLOSE|ALERT)\b(?:\s+(?:@\s*)?([0-9]+(?:[\.,][0-9]+)?))?(.*)$",
         re.IGNORECASE,
     )
     match = pattern.match(text)
@@ -169,7 +184,12 @@ def _extract_tokens_from_plain_text(text: str) -> Optional[AlertPayload]:
     ticker = match.group(1).upper()
     action = match.group(2).upper()
     price_str = match.group(3)
-    price = float(price_str) if price_str else None
+    price: Optional[float] = None
+    if price_str:
+        try:
+            price = float(price_str.replace(",", "."))
+        except ValueError:
+            price = None
     remaining_msg = match.group(4).strip() if match.group(4) else None
 
     return AlertPayload(

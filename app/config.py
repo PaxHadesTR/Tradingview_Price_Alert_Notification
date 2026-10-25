@@ -35,8 +35,10 @@ class Settings(BaseSettings):
     # Autonomous Alert Engine & Limits
     SQLITE_DB_PATH: str = "./data/alerts.db"
     MAX_ACTIVE_ALERTS: int = 100
+    MAX_USER_ACTIVE_ALERTS: int = 25
     ALERT_EXPIRY_DAYS: int = 180
     YAHOO_POLL_INTERVAL_SECONDS: float = 20.0
+    CACHE_TTL_SECONDS: float = 20.0
     BINANCE_WS_URL: str = "wss://stream.binance.com:9443/ws"
 
     # Rate Limiting & Queue Settings
