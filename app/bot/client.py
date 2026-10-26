@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import time
 from datetime import datetime
 from typing import List, Optional
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -22,6 +24,56 @@ def format_price(price: Optional[float]) -> str:
     if price >= 1.0:
         return f"${price:,.4f}"
     return f"${price:.8f}".rstrip("0")
+
+
+async def safe_defer(
+    interaction: discord.Interaction,
+    ephemeral: bool = False,
+    max_retries: int = 3,
+    retry_delay: float = 0.35,
+) -> bool:
+    """Safely defer interaction response with retry on transient proxy (503/timeout) errors."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=ephemeral)
+            return True
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            logger.warning(
+                "Transient network/proxy error during interaction defer (attempt %d/%d): %s",
+                attempt, max_retries, err,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Exhausted retries deferring interaction %s: %s", interaction.id, err)
+                raise
+        except Exception:
+            raise
+    return False
+
+
+async def safe_followup_send(
+    interaction: discord.Interaction,
+    max_retries: int = 3,
+    retry_delay: float = 0.35,
+    **kwargs,
+) -> Optional[discord.WebhookMessage]:
+    """Safely send followup message with retry on transient proxy errors."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await interaction.followup.send(**kwargs)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            logger.warning(
+                "Transient network/proxy error during followup send (attempt %d/%d): %s",
+                attempt, max_retries, err,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Exhausted retries sending followup for interaction %s: %s", interaction.id, err)
+                raise
+    return None
 
 
 async def symbol_autocomplete_handler(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
@@ -56,7 +108,7 @@ class RearmAlertModal(discord.ui.Modal, title="🔄 Alarmı Yeniden Kur"):
             self.note.default = alert.note
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction, ephemeral=True)
         success, msg, new_record = await self.engine.create_user_alert(
             user_id=str(interaction.user.id),
             user_name=interaction.user.name,
@@ -68,13 +120,16 @@ class RearmAlertModal(discord.ui.Modal, title="🔄 Alarmı Yeniden Kur"):
             notify_dm=self.alert.notify_dm,
         )
         if success and new_record:
-            await interaction.followup.send(
-                f"✅ **{new_record.symbol}** için alarm yeniden aktif edildi!\n"
-                f"🎯 **Hedef:** `{format_price(new_record.target_price)}` | 📊 **Yön:** `{new_record.direction}` | 🆔 ID: `#{new_record.id}`",
+            await safe_followup_send(
+                interaction,
+                content=(
+                    f"✅ **{new_record.symbol}** için alarm yeniden aktif edildi!\n"
+                    f"🎯 **Hedef:** `{format_price(new_record.target_price)}` | 📊 **Yön:** `{new_record.direction}` | 🆔 ID: `#{new_record.id}`"
+                ),
                 ephemeral=True,
             )
         else:
-            await interaction.followup.send(f"❌ Alarm kurulamadı: {msg}", ephemeral=True)
+            await safe_followup_send(interaction, content=f"❌ Alarm kurulamadı: {msg}", ephemeral=True)
 
 
 class AlertDeleteDropdown(discord.ui.Select):
@@ -113,7 +168,7 @@ class AlertDeleteDropdown(discord.ui.Select):
         if success:
             self.disabled = True
             await interaction.response.edit_message(view=self.view)
-            await interaction.followup.send(f"✅ `#{alert_id}` ID'li alarm başarıyla iptal edildi ve silindi.", ephemeral=True)
+            await safe_followup_send(interaction, content=f"✅ `#{alert_id}` ID'li alarm başarıyla iptal edildi ve silindi.", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Alarm silinirken bir hata oluştu veya zaten silinmiş.", ephemeral=True)
 
@@ -338,15 +393,31 @@ class DiscordAlertBot(commands.Bot):
         """Global error handler for slash commands."""
         @self.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-            logger.error("Error executing command %s: %s", interaction.command.name if interaction.command else "unknown", error, exc_info=True)
-            msg = f"⚠️ Komut işlenirken bir hata oluştu: {error}"
+            logger.error(
+                "Error executing command %s: %s",
+                interaction.command.name if interaction.command else "unknown",
+                error,
+                exc_info=True,
+            )
+            err_str = str(error)
+            is_proxy_err = "503" in err_str or "ClientHttpProxyError" in err_str or "Proxy" in err_str or "Cannot connect to host" in err_str
+
+            if is_proxy_err:
+                msg = (
+                    "⚠️ **Geçici Proxy Bağlantı Hatası (503):**\n"
+                    "> Discord proxy bağlantısında (`http://warp:1080`) anlık bir rota yenilenmesi veya kesinti yaşandı.\n"
+                    "> Lütfen **5-10 saniye bekleyip komutu tekrar deneyin**. Sorun devam ederse sunucudaki `warp` konteynerini kontrol edin."
+                )
+            else:
+                msg = f"⚠️ Komut işlenirken bir hata oluştu: {error}"
+
             try:
                 if interaction.response.is_done():
                     await interaction.followup.send(msg, ephemeral=True)
                 else:
                     await interaction.response.send_message(msg, ephemeral=True)
-            except Exception:
-                pass
+            except Exception as send_err:
+                logger.debug("Could not deliver error message to Discord user: %s", send_err)
 
     async def on_ready(self) -> None:
         """Invoked when bot successfully logs into Discord Gateway and goes Online."""
@@ -383,7 +454,7 @@ class DiscordAlertBot(commands.Bot):
             note: Optional[str] = None,
             dm: Optional[bool] = False,
         ):
-            await interaction.response.defer(ephemeral=False)
+            await safe_defer(interaction, ephemeral=False)
             success, msg, record = await self.engine.create_user_alert(
                 user_id=str(interaction.user.id),
                 user_name=interaction.user.name,
@@ -396,7 +467,7 @@ class DiscordAlertBot(commands.Bot):
             )
 
             if not success or not record:
-                await interaction.followup.send(f"❌ {msg}")
+                await safe_followup_send(interaction, content=f"❌ {msg}")
                 return
 
             direction_tr = "🟢 Yükseliş Kırılımı (ABOVE)" if record.direction == "ABOVE" else "🔴 Düşüş Kırılımı (BELOW)"
@@ -419,7 +490,7 @@ class DiscordAlertBot(commands.Bot):
                 embed.add_field(name="📝 Not", value=f"> {record.note}", inline=False)
             embed.set_footer(text=f"Alarm ID: #{record.id} • {record.asset_type}{dm_badge}")
 
-            await interaction.followup.send(content=f"{interaction.user.mention}", embed=embed)
+            await safe_followup_send(interaction, content=f"{interaction.user.mention}", embed=embed)
 
         # --- /alert list ---
         @alert_group.command(name="list", description="Kurduğunuz alarmları listeler ve tek tıkla silme menüsü sunar")
@@ -430,12 +501,12 @@ class DiscordAlertBot(commands.Bot):
             app_commands.Choice(name="📋 Tüm Alarmlar", value="ALL"),
         ])
         async def list_alerts(interaction: discord.Interaction, status: Optional[str] = "ACTIVE"):
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction, ephemeral=True)
             filter_status = None if status == "ALL" else status
             alerts = await self.engine.db.get_user_alerts(user_id=str(interaction.user.id), status=filter_status)
 
             if not alerts:
-                await interaction.followup.send("📭 Bu kategoride kayıtlı alarmınız bulunmamaktadır.", ephemeral=True)
+                await safe_followup_send(interaction, content="📭 Bu kategoride kayıtlı alarmınız bulunmamaktadır.", ephemeral=True)
                 return
 
             embed = discord.Embed(
@@ -467,7 +538,7 @@ class DiscordAlertBot(commands.Bot):
                 embed.set_footer(text=f"İlk 15 alarm listeleniyor. Toplam: {len(alerts)}")
 
             view = AlertListView(self.engine, alerts, str(interaction.user.id))
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            await safe_followup_send(interaction, embed=embed, view=view, ephemeral=True)
 
         # --- /alert clear ---
         @alert_group.command(name="clear", description="Geçmiş veya tüm alarmlarınızı topluca temizler")
@@ -478,35 +549,35 @@ class DiscordAlertBot(commands.Bot):
             app_commands.Choice(name="💥 TÜM Alarmlarımı Temizle (Aktif + Tetiklenmiş)", value="ALL"),
         ])
         async def clear_alerts(interaction: discord.Interaction, scope: Optional[str] = "TRIGGERED"):
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction, ephemeral=True)
             deleted_count = await self.engine.db.clear_user_alerts(user_id=str(interaction.user.id), status=scope)
             if deleted_count > 0:
                 scope_tr = "Tetiklenmiş" if scope == "TRIGGERED" else ("Aktif" if scope == "ACTIVE" else "Tüm")
-                await interaction.followup.send(f"🗑 **{deleted_count}** adet {scope_tr} alarm başarıyla temizlendi.", ephemeral=True)
+                await safe_followup_send(interaction, content=f"🗑 **{deleted_count}** adet {scope_tr} alarm başarıyla temizlendi.", ephemeral=True)
             else:
-                await interaction.followup.send("ℹ️ Temizlenecek uygun alarm bulunamadı.", ephemeral=True)
+                await safe_followup_send(interaction, content="ℹ️ Temizlenecek uygun alarm bulunamadı.", ephemeral=True)
 
         # --- /alert delete ---
         @alert_group.command(name="delete", description="Belirli bir alarmı ID ile iptal eder")
         @app_commands.describe(alert_id="İptal edilecek alarm ID'si (Örn: 5)")
         async def delete_alert(interaction: discord.Interaction, alert_id: int):
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction, ephemeral=True)
             success = await self.engine.db.cancel_alert(alert_id=alert_id, user_id=str(interaction.user.id))
             if success:
-                await interaction.followup.send(f"🗑 ID `#{alert_id}` numaralı alarm iptal edildi.", ephemeral=True)
+                await safe_followup_send(interaction, content=f"🗑 ID `#{alert_id}` numaralı alarm iptal edildi.", ephemeral=True)
             else:
-                await interaction.followup.send(f"❌ `#{alert_id}` ID'li aktif bir alarmınız bulunamadı.", ephemeral=True)
+                await safe_followup_send(interaction, content=f"❌ `#{alert_id}` ID'li aktif bir alarmınız bulunamadı.", ephemeral=True)
 
         # --- /price ---
         @self.tree.command(name="price", description="Herhangi bir sembolün güncel fiyatını sorgular")
         @app_commands.describe(symbol="Sorgulanacak sembol (Örn: BTC, ETH, THYAO, GOLD, NASDAQ, DJI, USDTRY)")
         @app_commands.autocomplete(symbol=symbol_autocomplete_handler)
         async def price_query(interaction: discord.Interaction, symbol: str):
-            await interaction.response.defer(ephemeral=False)
+            await safe_defer(interaction, ephemeral=False)
             norm_symbol, _ = classify_and_normalize(symbol)
             current_price = await self.engine.feed.get_current_price(symbol)
             if current_price is None:
-                await interaction.followup.send(f"❌ **{symbol}** için anlık fiyat alınamadı.")
+                await safe_followup_send(interaction, content=f"❌ **{symbol}** için anlık fiyat alınamadı.")
                 return
 
             display_title = symbol.upper().strip()
@@ -519,17 +590,18 @@ class DiscordAlertBot(commands.Bot):
                 timestamp=datetime.now(),
             )
             embed.add_field(name="Anlık Değer", value=f"`{format_price(current_price)}`", inline=True)
-            await interaction.followup.send(embed=embed)
+            await safe_followup_send(interaction, embed=embed)
 
         # --- /watchlist show ---
         @watchlist_group.command(name="show", description="Kişisel takip listenizdeki tüm varlıkların anlık fiyatlarını gösterir")
         async def watchlist_show(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=False)
+            await safe_defer(interaction, ephemeral=False)
             symbols = await self.engine.db.get_user_watchlist(str(interaction.user.id))
 
             if not symbols:
-                await interaction.followup.send(
-                    "📭 Takip listeniz boş! `/watchlist add symbol:BTC` komutu ile semboller ekleyebilirsiniz.",
+                await safe_followup_send(
+                    interaction,
+                    content="📭 Takip listeniz boş! `/watchlist add symbol:BTC` komutu ile semboller ekleyebilirsiniz.",
                     ephemeral=True,
                 )
                 return
@@ -546,27 +618,29 @@ class DiscordAlertBot(commands.Bot):
                 embed.add_field(name=f"🔹 {sym}", value=f"`{format_price(price)}`", inline=True)
 
             embed.set_footer(text=f"Toplam: {len(symbols)} varlık • /watchlist")
-            await interaction.followup.send(embed=embed)
+            await safe_followup_send(interaction, embed=embed)
 
         # --- /watchlist add ---
         @watchlist_group.command(name="add", description="Takip listenize yeni bir sembol ekler")
         @app_commands.describe(symbol="Takip listesine eklenecek sembol (Örn: BTC, ETH, THYAO, GOLD)")
         @app_commands.autocomplete(symbol=symbol_autocomplete_handler)
         async def watchlist_add(interaction: discord.Interaction, symbol: str):
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction, ephemeral=True)
             norm_symbol, asset_type = classify_and_normalize(symbol)
             success = await self.engine.db.add_to_watchlist(str(interaction.user.id), norm_symbol, asset_type)
 
             if success:
                 price = await self.engine.feed.get_current_price(norm_symbol)
                 price_info = f" (Anlık: `{format_price(price)}`)" if price is not None else ""
-                await interaction.followup.send(
-                    f"⭐ **{norm_symbol}** takip listenize eklendi!{price_info}",
+                await safe_followup_send(
+                    interaction,
+                    content=f"⭐ **{norm_symbol}** takip listenize eklendi!{price_info}",
                     ephemeral=True,
                 )
             else:
-                await interaction.followup.send(
-                    f"ℹ️ **{norm_symbol}** zaten takip listenizde kayıtlı.",
+                await safe_followup_send(
+                    interaction,
+                    content=f"ℹ️ **{norm_symbol}** zaten takip listenizde kayıtlı.",
                     ephemeral=True,
                 )
 
@@ -575,19 +649,19 @@ class DiscordAlertBot(commands.Bot):
         @app_commands.describe(symbol="Kaldırılacak sembol")
         @app_commands.autocomplete(symbol=symbol_autocomplete_handler)
         async def watchlist_remove(interaction: discord.Interaction, symbol: str):
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction, ephemeral=True)
             norm_symbol, _ = classify_and_normalize(symbol)
             success = await self.engine.db.remove_from_watchlist(str(interaction.user.id), norm_symbol)
 
             if success:
-                await interaction.followup.send(f"🗑 **{norm_symbol}** takip listenizden çıkarıldı.", ephemeral=True)
+                await safe_followup_send(interaction, content=f"🗑 **{norm_symbol}** takip listenizden çıkarıldı.", ephemeral=True)
             else:
-                await interaction.followup.send(f"❌ **{norm_symbol}** takip listenizde bulunamadı.", ephemeral=True)
+                await safe_followup_send(interaction, content=f"❌ **{norm_symbol}** takip listenizde bulunamadı.", ephemeral=True)
 
         # --- /help ---
         @self.tree.command(name="help", description="Bot özellikleri, komutlar ve sembol kullanım rehberi")
         async def help_command(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction, ephemeral=True)
             embed = discord.Embed(
                 title="📖 TradingView & Market Alert Bot Rehberi",
                 description=(
@@ -602,12 +676,12 @@ class DiscordAlertBot(commands.Bot):
             )
             embed.set_footer(text="Bir kategori seçmek için aşağıdaki menüyü kullanın.")
             view = HelpView()
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            await safe_followup_send(interaction, embed=embed, view=view, ephemeral=True)
 
         # --- /stats ---
         @self.tree.command(name="stats", description="Sistem durumu, gecikme süresi, aktif alarm sayıları ve istatistikler")
         async def stats_command(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=False)
+            await safe_defer(interaction, ephemeral=False)
             db_stats = await self.engine.db.get_database_stats()
             uptime_seconds = int(time.time() - self.start_time)
             uptime_hours, rem = divmod(uptime_seconds, 3600)
@@ -628,7 +702,7 @@ class DiscordAlertBot(commands.Bot):
             embed.add_field(name="🌐 Piyasa Beslemesi", value="`Binance WS + Yahoo Poller`", inline=True)
             embed.set_footer(text="TradingView Price Alert & Market Engine")
 
-            await interaction.followup.send(embed=embed)
+            await safe_followup_send(interaction, embed=embed)
 
         self.tree.add_command(alert_group)
         self.tree.add_command(watchlist_group)
@@ -661,14 +735,21 @@ class DiscordAlertBot(commands.Bot):
 
         # 1. If notify_dm is requested, attempt Direct Message dispatch first
         if alert.notify_dm:
-            try:
-                user = self.get_user(int(alert.user_id)) or await self.fetch_user(int(alert.user_id))
-                if user:
-                    await user.send(content="🔔 **Fiyat Alarmınız Tetiklendi!**", embed=embed, view=view)
-                    logger.info("Successfully dispatched DM alert #%d to user %s", alert.id, alert.user_id)
-                    return
-            except Exception as dm_err:
-                logger.warning("Failed sending DM to user %s (falling back to channel): %s", alert.user_id, dm_err)
+            for attempt in range(1, 4):
+                try:
+                    user = self.get_user(int(alert.user_id)) or await self.fetch_user(int(alert.user_id))
+                    if user:
+                        await user.send(content="🔔 **Fiyat Alarmınız Tetiklendi!**", embed=embed, view=view)
+                        logger.info("Successfully dispatched DM alert #%d to user %s", alert.id, alert.user_id)
+                        return
+                except (aiohttp.ClientError, asyncio.TimeoutError) as dm_net_err:
+                    if attempt < 3:
+                        await asyncio.sleep(0.5)
+                    else:
+                        logger.warning("Failed sending DM to user %s after 3 attempts: %s", alert.user_id, dm_net_err)
+                except Exception as dm_err:
+                    logger.warning("Failed sending DM to user %s (falling back to channel): %s", alert.user_id, dm_err)
+                    break
 
         # 2. Standard Channel dispatch
         target_channel_id = self.settings.DISCORD_ALERT_CHANNEL_ID or int(alert.channel_id)
@@ -681,8 +762,17 @@ class DiscordAlertBot(commands.Bot):
                 logger.error("Could not fetch Discord channel %s to dispatch alert: %s", target_channel_id, e)
                 return
 
-        try:
-            await channel.send(content=content, embed=embed, view=view)
-            logger.info("Successfully announced alert #%d in Discord channel %s", alert.id, target_channel_id)
-        except Exception as e:
-            logger.error("Failed to send alert message to Discord channel: %s", e, exc_info=True)
+        for attempt in range(1, 4):
+            try:
+                await channel.send(content=content, embed=embed, view=view)
+                logger.info("Successfully announced alert #%d in Discord channel %s", alert.id, target_channel_id)
+                break
+            except (aiohttp.ClientError, asyncio.TimeoutError) as net_err:
+                if attempt < 3:
+                    logger.warning("Attempt %d/3 failed sending alert to channel %s: %s. Retrying in 0.5s...", attempt, target_channel_id, net_err)
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.error("Failed to send alert message to Discord channel after 3 attempts: %s", net_err, exc_info=True)
+            except Exception as e:
+                logger.error("Failed to send alert message to Discord channel: %s", e, exc_info=True)
+                break

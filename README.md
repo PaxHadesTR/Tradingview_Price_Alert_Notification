@@ -19,16 +19,32 @@ Bu projede Türkiye'deki kullanıcıların ek hiçbir ücret ödemeden ve VPN ku
 
 ### Nasıl Uygulanır?
 
-#### 1. Coolify ile Kullanıyorsanız (Tek Komut)
-Sunucunuzun terminalinde (veya WSL içinde) tek bir komutla hafif Cloudflare WARP konteynerini `coolify` ağına bağlayın:
+#### 1. Coolify ile Kullanıyorsanız (Önerilen Sağlam Kurulum)
+Sunucunuzun terminalinde (veya WSL içinde) Cloudflare WARP konteynerini gerekli çekirdek ağ yetkileri ve kalıcı oturum hacmiyle başlatın:
 ```bash
-docker run -d --name warp --cap-add NET_ADMIN --network coolify --restart always caomingjun/warp
+docker rm -f warp
+docker run -d \
+  --name warp \
+  --restart always \
+  --network coolify \
+  --cap-add NET_ADMIN \
+  --cap-add MKNOD \
+  --cap-add AUDIT_WRITE \
+  --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+  -e WARP_SLEEP=5 \
+  -v warp_data:/var/lib/cloudflare-warp \
+  caomingjun/warp:latest
 ```
 Ardından Coolify'da **Environment Variables** kısmına şunu ekleyin:
 ```env
 DISCORD_PROXY=http://warp:1080
 ```
 Konteyneri **Restart** ettiğinizde bot engeli tamamen aşarak Discord'a bağlanacaktır.
+
+> **💡 İpucu (Proxy Durum Kontrolü):**
+> Bağlantı durumunu kontrol etmek için: `docker exec warp warp-cli status` (Connected yazmalıdır).
+> Eğer nadiren bağlantı koparsa: `docker exec warp warp-cli connect` komutuyla hemen yeniden bağlayabilirsiniz.
 
 #### 2. Standart Docker Compose ile Kullanıyorsanız
 Proje kökündeki `docker-compose.yml` dosyasına `warp` servisi zaten eklenmiştir:

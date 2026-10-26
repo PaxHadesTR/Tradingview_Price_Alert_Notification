@@ -33,8 +33,20 @@ services:
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
+      - MKNOD
+      - AUDIT_WRITE
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    environment:
+      - WARP_SLEEP=5
+    volumes:
+      - warp_data:/var/lib/cloudflare-warp
     logging:
       driver: "json-file"
       options:
         max-size: "5m"
         max-file: "2"
+
+volumes:
+  warp_data:
