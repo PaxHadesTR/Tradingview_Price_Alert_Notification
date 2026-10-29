@@ -185,6 +185,20 @@ class AlertDatabase:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def reset_alert_to_active(self, alert_id: int) -> bool:
+        """Reset an alert back to ACTIVE if notification dispatch failed."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE alerts
+                SET status = 'ACTIVE', triggered_at = NULL
+                WHERE id = ? AND status = 'TRIGGERED';
+                """,
+                (alert_id,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def cancel_alert(self, alert_id: int, user_id: Optional[str] = None) -> bool:
         """Cancel an active alert. If user_id provided, ensures user owns the alert."""
         query = "UPDATE alerts SET status = 'CANCELLED' WHERE id = ? AND status = 'ACTIVE'"

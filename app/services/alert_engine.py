@@ -120,9 +120,21 @@ class AutonomousAlertEngine:
                     )
                     if self.trigger_callback:
                         try:
-                            await self.trigger_callback(alert, current_price)
+                            result = await self.trigger_callback(alert, current_price)
+                            if result is False:
+                                logger.warning(
+                                    "Trigger callback reported dispatch failure for alert #%d; resetting to ACTIVE for retry.",
+                                    alert.id,
+                                )
+                                await self.db.reset_alert_to_active(alert.id)
                         except Exception as e:
-                            logger.error("Error executing alert trigger callback: %s", e, exc_info=True)
+                            logger.error(
+                                "Error executing alert trigger callback for alert #%d: %s; resetting to ACTIVE for retry.",
+                                alert.id,
+                                e,
+                                exc_info=True,
+                            )
+                            await self.db.reset_alert_to_active(alert.id)
 
     async def create_user_alert(
         self,

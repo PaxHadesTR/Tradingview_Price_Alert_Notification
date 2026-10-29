@@ -46,6 +46,21 @@ class Settings(BaseSettings):
     MAX_QUEUE_CAPACITY: int = 500
     HTTP_TIMEOUT_SECONDS: float = 10.0
 
+    @property
+    def is_discord_bot_configured(self) -> bool:
+        """Check if a valid, non-placeholder Discord bot token is configured."""
+        token = (self.DISCORD_BOT_TOKEN or "").strip().strip('"').strip("'")
+        dummy_tokens = {
+            "your_discord_bot_token_here",
+            "buraya_bot_tokeniniz",
+            "none",
+            "null",
+            "dummy",
+            "undefined",
+            "false",
+        }
+        return bool(token and token.lower() not in dummy_tokens)
+
 
 @lru_cache()
 def get_settings() -> Settings:

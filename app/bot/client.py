@@ -365,6 +365,9 @@ class HelpView(discord.ui.View):
         self.add_item(HelpCategorySelect())
 
 
+_commands_synced_globally: bool = False
+
+
 class DiscordAlertBot(commands.Bot):
     """Discord Bot implementation handling Slash Commands, Autocomplete, Watchlist, and Notifications."""
 
@@ -376,18 +379,25 @@ class DiscordAlertBot(commands.Bot):
         self.settings = settings
         self.start_time = time.time()
         self.engine.trigger_callback = self.dispatch_alert_notification
+        logging.getLogger("discord.gateway").setLevel(logging.INFO)
+        logging.getLogger("discord.client").setLevel(logging.INFO)
         if proxy_url:
             logger.info("Discord Bot configured with outbound proxy: %s", proxy_url)
 
     async def setup_hook(self) -> None:
         """Register slash command groups and sync tree."""
+        global _commands_synced_globally
         self._register_commands()
         self._setup_error_handler()
-        try:
-            synced = await self.tree.sync()
-            logger.info("Synced %d Discord Slash Commands.", len(synced))
-        except Exception as e:
-            logger.warning("Failed syncing slash command tree: %s", e)
+        if not _commands_synced_globally:
+            try:
+                synced = await self.tree.sync()
+                _commands_synced_globally = True
+                logger.info("Synced %d Discord Slash Commands.", len(synced))
+            except Exception as e:
+                logger.warning("Failed syncing slash command tree: %s", e)
+        else:
+            logger.info("Slash commands already synced globally in this session; skipping remote tree sync.")
 
     def _setup_error_handler(self) -> None:
         """Global error handler for slash commands."""
@@ -419,6 +429,11 @@ class DiscordAlertBot(commands.Bot):
             except Exception as send_err:
                 logger.debug("Could not deliver error message to Discord user: %s", send_err)
 
+    async def on_connect(self) -> None:
+        """Invoked when bot establishes connection with Discord Gateway."""
+        latency_str = f"{self.latency * 1000:.1f}ms" if self.latency and self.latency > 0 else "N/A"
+        logger.info("🔌 Discord Gateway connected (Latency: %s). Waiting for READY event...", latency_str)
+
     async def on_ready(self) -> None:
         """Invoked when bot successfully logs into Discord Gateway and goes Online."""
         logger.info("🚀 Discord Bot is ONLINE! Logged in as: %s (ID: %s)", self.user, self.user.id if self.user else "N/A")
@@ -432,6 +447,18 @@ class DiscordAlertBot(commands.Bot):
             )
         except Exception as e:
             logger.debug("Failed updating presence activity: %s", e)
+
+    async def on_resumed(self) -> None:
+        """Invoked when bot resumes a disconnected session with Discord Gateway."""
+        logger.info("♻️ Discord Gateway session RESUMED. Resuming normal operations.")
+
+    async def on_disconnect(self) -> None:
+        """Invoked when bot loses connection to Discord Gateway."""
+        logger.warning("⚡ Discord Gateway DISCONNECTED! Awaiting automatic reconnection or supervisor restart.")
+
+    async def on_error(self, event_method: str, *args, **kwargs) -> None:
+        """Catch-all for unhandled exceptions in event listeners."""
+        logger.error("❌ Unhandled exception in Discord event '%s'", event_method, exc_info=True)
 
     def _register_commands(self) -> None:
         """Define all slash commands and command groups."""
@@ -707,8 +734,12 @@ class DiscordAlertBot(commands.Bot):
         self.tree.add_command(alert_group)
         self.tree.add_command(watchlist_group)
 
-    async def dispatch_alert_notification(self, alert: AlertRecord, current_price: float) -> None:
-        """Send rich embed notification to target channel or directly via DM."""
+    async def dispatch_alert_notification(self, alert: AlertRecord, current_price: float) -> bool:
+        """Send rich embed notification to target channel or directly via DM. Returns True if delivered, False otherwise."""
+        if self.is_closed():
+            logger.warning("Discord Alert Bot client is closed/reconnecting. Skipping dispatch for alert #%d.", alert.id)
+            return False
+
         is_bullish = alert.direction == "ABOVE"
         direction_label = "Yükseliş Kırılımı (ABOVE)" if is_bullish else "Düşüş Kırılımı (BELOW)"
         color = 0x00FF88 if is_bullish else 0xFF3366
@@ -741,7 +772,7 @@ class DiscordAlertBot(commands.Bot):
                     if user:
                         await user.send(content="🔔 **Fiyat Alarmınız Tetiklendi!**", embed=embed, view=view)
                         logger.info("Successfully dispatched DM alert #%d to user %s", alert.id, alert.user_id)
-                        return
+                        return True
                 except (aiohttp.ClientError, asyncio.TimeoutError) as dm_net_err:
                     if attempt < 3:
                         await asyncio.sleep(0.5)
@@ -760,12 +791,14 @@ class DiscordAlertBot(commands.Bot):
                 channel = await self.fetch_channel(target_channel_id)
             except Exception as e:
                 logger.error("Could not fetch Discord channel %s to dispatch alert: %s", target_channel_id, e)
-                return
+                return False
 
+        delivered = False
         for attempt in range(1, 4):
             try:
                 await channel.send(content=content, embed=embed, view=view)
                 logger.info("Successfully announced alert #%d in Discord channel %s", alert.id, target_channel_id)
+                delivered = True
                 break
             except (aiohttp.ClientError, asyncio.TimeoutError) as net_err:
                 if attempt < 3:
@@ -776,3 +809,5 @@ class DiscordAlertBot(commands.Bot):
             except Exception as e:
                 logger.error("Failed to send alert message to Discord channel: %s", e, exc_info=True)
                 break
+
+        return delivered

@@ -153,6 +153,10 @@ class DiscordBotNotificationProvider(BaseNotificationProvider):
         if not self.bot or not self.channel_id:
             return False
 
+        if getattr(self.bot, "is_closed", None) and self.bot.is_closed():
+            logger.warning("DiscordBotNotificationProvider: Bot client is closed/reconnecting. Skipping dispatch.")
+            return False
+
         try:
             channel = self.bot.get_channel(self.channel_id)
             if not channel:

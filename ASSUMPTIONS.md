@@ -8,6 +8,10 @@
 5. **Zero-Block Dual Process Loop**: Both FastAPI (healthcheck / webhooks) and Discord Bot Gateway run concurrently on the same non-blocking `asyncio` event loop.
 6. **Price Cache Freshness (TTL)**: In-memory price cache enforces a 20-second TTL to ensure quotes queried by users or watchlists are continually refreshed and never served stale.
 7. **Dual TradingView Routing**: TradingView webhook ingestion automatically falls back to the running Discord Bot client if `DISCORD_WEBHOOK_URL` is omitted, eliminating setup confusion for end-users.
+8. **Autonomous Gateway Supervisor & Self-Healing**: When `DISCORD_BOT_TOKEN` is configured, the bot connection is managed by a persistent supervisor loop with exponential backoff (`5s -> 10s -> 30s -> max 60s`). Disconnections, gateway errors, or proxy drops trigger automatic cleanup and fresh client re-instantiation.
+9. **Bot-Aware Container Healthcheck**: If the bot is configured but dead or offline (outside the initial 20-second connection grace period), `/live` and `/healthz` return HTTP 503, signaling Docker and Coolify to restart the container if unrecoverable.
+10. **Zero-Loss Alert Delivery Rollback**: If an alert trigger notification fails to dispatch because the Discord bot client is disconnected/reconnecting or channel delivery fails, the alert atomically rolls back to `ACTIVE` in SQLite to ensure subsequent ticks re-trigger delivery once connection is restored.
+11. **Idempotent Command Registration**: Slash commands are registered locally on client instantiation but synchronized remotely via Discord REST API exactly once per process runtime, preventing 429 rate limit bans during supervisor reconnect loops.
 
 ## Technical Assumptions
 - **Crypto Symbol Format**: Binance pairs format (e.g. `BTCUSDT`, `ETHUSDT`, `SOLUSDT`). Auto-normalized to uppercase.

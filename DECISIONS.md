@@ -82,3 +82,16 @@
 * **Context**: Cached market quotes must not serve stale prices across hours, and assets monitored in user watchlists should be pre-warmed.
 * **Decision**: Implement timestamped price cache tuples with a 20-second TTL in `UnifiedPriceFeed`, and aggregate both active alerts and user watchlists into the Yahoo Finance background polling supplier.
 * **Outcome**: Instant sub-second quote lookups in `/watchlist show` and `/price` while guaranteeing quotes never become stale.
+
+---
+
+## ADR-010: Persistent Discord Bot Supervisor with Bot-Aware Healthcheck & Gateway Observability
+* **Date**: 2026-10-29
+* **Status**: ACCEPTED
+* **Context**: Network proxy drops (e.g. WARP proxy restarts) or Discord gateway disconnections caused `bot.start()` to terminate permanently. Reusing the closed client threw `RuntimeError: Cannot reuse a closed Discord client`. Concurrently, `/live` and `/healthz` returned 200 OK blindly, preventing Coolify/Docker from detecting offline status and restarting the container. Disconnection events were also missing from stdout logs.
+* **Decision**:
+  1. *Persistent Supervisor Loop in `app/main.py`*: Implement an infinite supervisor loop with exponential backoff (`5s -> 10s -> 30s -> max 60s`). Upon any gateway termination or failure, clean up the dead client (`await bot.close()`), create a fresh `DiscordAlertBot` instance, atomically update `app.state.discord_bot` and `DiscordBotNotificationProvider.bot`, and reconnect. Immediately abort supervisor on fatal non-recoverable authentication errors (`LoginFailure`, `PrivilegedIntentsRequired`) to prevent Discord API bans.
+  2. *Bot-Aware Healthcheck in `app/routes/health.py`*: Check `settings.is_discord_bot_configured`. If enabled, verify supervisor task liveness, bot instance state, and ready status. A 20s startup grace period covers all unready/reconnecting states during cold container boot to prevent premature deployment aborts in Coolify. If offline or dead after grace period, return HTTP 503 to trigger container recovery.
+  3. *Gateway Lifecycle Observability*: Implement `on_connect`, `on_resumed`, `on_disconnect`, and `on_error` listeners in `DiscordAlertBot`, and enforce INFO level for `discord` logger hierarchy.
+  4. *Alert Delivery Integrity & Rate Limit Protection*: Add `reset_alert_to_active` rollback in `app/database/db.py` when dispatch fails or client is reconnecting, preventing lost alerts. Implement single global command sync in `app/bot/client.py` to prevent hitting Discord's 200/day slash command rate limit during reconnect cycles.
+* **Outcome**: Resilient self-healing bot connections under proxy/network instability, zero deadlocks, transparent logging, zero lost alerts, and reliable container orchestration via Docker healthchecks.
